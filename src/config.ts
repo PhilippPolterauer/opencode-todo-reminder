@@ -11,23 +11,6 @@ export const TodoReminderConfigSchema = z.object({
     enabled: z.boolean().optional().default(true),
 
     /**
-     * The reminder message to use
-     * @default "You have open todos. Please continue working on them until they are completed."
-     */
-    message: z
-        .string()
-        .optional()
-        .default(
-            "You have open todos. Please continue working on them until they are completed.",
-        ),
-
-    /**
-     * Marker used to separate reminder from content (mostly for "append" mode)
-     * @default "--- todo-reminder ---"
-     */
-    marker: z.string().optional().default("--- todo-reminder ---"),
-
-    /**
      * Todo statuses that trigger the reminder
      * @default ["pending", "in_progress", "open"]
      */
@@ -79,9 +62,6 @@ export type TodoReminderConfig = z.infer<typeof TodoReminderConfigSchema>;
 
 const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     enabled: true,
-    message:
-        "You have open todos. Please continue working on them until they are completed.",
-    marker: "--- todo-reminder ---",
     triggerStatuses: ["pending", "in_progress", "open"],
     maxAutoSubmitsPerTodo: 3,
     idleDelayMs: 1500,

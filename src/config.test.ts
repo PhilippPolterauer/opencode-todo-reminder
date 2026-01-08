@@ -35,9 +35,6 @@ describe("config", () => {
 
             expect(config).toEqual({
                 enabled: true,
-                message:
-                    "You have open todos. Please continue working on them until they are completed.",
-                marker: "--- todo-reminder ---",
                 triggerStatuses: ["pending", "in_progress", "open"],
                 maxAutoSubmitsPerTodo: 3,
                 idleDelayMs: 1500,
@@ -85,8 +82,6 @@ describe("config", () => {
         it("should allow overriding all config values", async () => {
             const userConfig = {
                 enabled: false,
-                message: "Custom message",
-                marker: "---custom---",
                 triggerStatuses: ["pending"],
                 maxAutoSubmitsPerTodo: 5,
                 idleDelayMs: 2000,

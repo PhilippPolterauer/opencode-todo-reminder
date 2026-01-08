@@ -26,8 +26,6 @@ function createConfig(
 ): Required<TodoReminderConfig> {
     return {
         enabled: true,
-        message: "Test message",
-        marker: "---",
         triggerStatuses: ["pending", "in_progress", "open"],
         maxAutoSubmitsPerTodo: 3,
         idleDelayMs: 1500,

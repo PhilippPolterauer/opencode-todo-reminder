@@ -1,32 +1,28 @@
 # opencode-todo-reminder
 
-An OpenCode plugin that automatically reminds the AI to continue working on incomplete todos.
+An OpenCode plugin that automatically reminds the Agent to continue working when todos are still open.
 
 > **Disclaimer:** This project is not affiliated with, endorsed by, or sponsored by the OpenCode project or its maintainers. It is an independent community plugin.
 
 ## What it does
 
-When the AI creates a todo list but stops before completing all tasks, this plugin automatically sends a continuation prompt to remind it to keep working. This prevents the AI from "forgetting" about pending tasks and ensures it follows through on multi-step work.
+When an Agent creates a todo list but stops before completing all tasks, this plugin injects a continuation prompt so the Agent keeps going. This helps prevent unfinished multi-step work from stalling.
 
-### How it works
+## How it works
 
-1. The plugin monitors todo list updates and session idle events
-2. When the session becomes idle and there are still pending/in-progress todos, it waits briefly (to avoid racing with the AI)
-3. It then injects a continuation prompt like: *"Incomplete tasks remain in your todo list. Continue working on the next pending task now."*
-4. The AI receives this as a new message and resumes work on the remaining todos
+- Watches `todo.updated` and `session.idle` events.
+- When the session becomes idle and there are todos in a trigger status, it waits for `idleDelayMs` and then calls `client.session.prompt(...)` with a short reminder.
+- The reminder can include progress ("X/Y completed") when `includeProgressInPrompt` is enabled.
 
-### Safety features
+## Safety features
 
-- **Loop protection**: Limits auto-reminders per todo (default: 3) to prevent infinite loops if a task is stuck
-- **Cooldown**: Minimum time between reminders (default: 15 seconds) to avoid rapid-fire prompts
-- **Interrupt detection**: Skips reminders if the user interrupted the AI or has a queued message
-- **Agent/model preservation**: Sends reminders using the same agent (Plan/Code) and model the user was using
+- **Loop protection**: Stops after `maxAutoSubmitsPerTodo` attempts for the same todo and sends a "paused" prompt.
+- **Cooldown**: Enforces `cooldownMs` between injections per session.
+- **Interrupt/queue detection**: Skips injection when the last message indicates the session is busy (e.g. last message is from the user, the last assistant message is still generating, or it was aborted).
+- **Agent/model preservation**: Uses the last seen user `agent` and `model` when sending reminder prompts.
+- **Optional toast**: When `useToasts` is enabled, it calls `client.tui.showToast(...)` before injecting.
 
 ## Installation
-
-```bash
-npm install opencode-todo-reminder
-```
 
 Add the plugin to your `opencode.json`:
 
@@ -40,7 +36,12 @@ Add the plugin to your `opencode.json`:
 
 ## Configuration
 
-Create a config file at `.opencode/todo-reminder.json` (project-level) or `~/.config/opencode/todo-reminder.json` (global):
+Config file locations:
+
+- Project: `.opencode/todo-reminder.json`
+- Global: `~/.config/opencode/todo-reminder.json`
+
+Example:
 
 ```json
 {
@@ -60,31 +61,34 @@ Create a config file at `.opencode/todo-reminder.json` (project-level) or `~/.co
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable or disable the plugin |
-| `maxAutoSubmitsPerTodo` | number | `3` | Max reminders per todo before stopping (loop protection) |
-| `idleDelayMs` | number | `1500` | Delay (ms) after idle before sending reminder |
-| `cooldownMs` | number | `15000` | Minimum time (ms) between reminders |
+| `maxAutoSubmitsPerTodo` | number | `3` | Max reminders per todo before pausing (loop protection) |
+| `idleDelayMs` | number | `1500` | Delay (ms) after idle before injecting |
+| `cooldownMs` | number | `15000` | Minimum time (ms) between injections |
 | `triggerStatuses` | string[] | `["pending", "in_progress", "open"]` | Todo statuses that trigger reminders |
 | `includeProgressInPrompt` | boolean | `true` | Include "X/Y completed" in the reminder |
-| `useToasts` | boolean | `true` | Show toast notifications when reminders are sent |
-| `syntheticPrompt` | boolean | `false` | Hide the reminder prompt from the chat UI |
+| `useToasts` | boolean | `true` | Show a toast when a reminder is injected |
+| `syntheticPrompt` | boolean | `false` | Set the injected prompt part `synthetic` flag |
 
 ## Example
 
 Without this plugin:
+
 ```
 User: "Refactor the auth module and update tests"
-AI: Creates todo list with 5 tasks, completes 2, then stops
-User: Has to manually prompt "continue" or "keep going"
+Agent: Creates todo list with 5 tasks, completes 2, then stops
+User: Prompts "continue" manually
 ```
 
 With this plugin:
+
 ```
-User: "Refactor the auth module and update tests"  
-AI: Creates todo list with 5 tasks, completes 2, pauses
-Plugin: Automatically sends "Incomplete tasks remain..." 
-AI: Continues with task 3, 4, 5 until all complete
+User: "Refactor the auth module and update tests"
+Agent: Creates todo list with 5 tasks, completes 2, pauses
+Plugin: Injects a reminder prompt
+Agent: Continues with task 3, 4, 5
 ```
 
 ## License
 
 MIT
+
