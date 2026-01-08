@@ -33,6 +33,7 @@ function createConfig(
         includeProgressInPrompt: true,
         useToasts: true,
         syntheticPrompt: false,
+        debug: false,
         ...overrides,
     };
 }

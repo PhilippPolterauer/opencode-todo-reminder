@@ -7,13 +7,52 @@ import {
     type EventMessageUpdated,
     type EventMessagePartUpdated,
 } from "@opencode-ai/sdk";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { loadConfig, type TodoReminderConfig } from "./config.js";
 
 const DEBUG_PREFIX = "[TodoReminder]";
 
-function debug(...args: unknown[]) {
-    // Uncomment for debugging:
-    // console.error(DEBUG_PREFIX, ...args);
+let debugEnabled = false;
+let debugLogPath: string | null = null;
+
+/**
+ * Initialize the debug logger with the project directory.
+ */
+function initDebugLogger(directory: string | undefined, enabled: boolean): void {
+    debugEnabled = enabled;
+    if (enabled && directory) {
+        const opencodeDir = join(directory, ".opencode");
+        try {
+            mkdirSync(opencodeDir, { recursive: true });
+        } catch {
+            // Directory may already exist
+        }
+        debugLogPath = join(opencodeDir, "todo-reminder.log");
+    }
+}
+
+/**
+ * Write debug messages to the log file.
+ */
+function debug(...args: unknown[]): void {
+    if (!debugEnabled || !debugLogPath) {
+        return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const message = args
+        .map((arg) =>
+            typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)
+        )
+        .join(" ");
+    const logLine = `${timestamp} ${DEBUG_PREFIX} ${message}\n`;
+
+    try {
+        appendFileSync(debugLogPath, logLine);
+    } catch {
+        // Silently fail if we can't write to the log file
+    }
 }
 
 /**
@@ -95,6 +134,9 @@ export function filterPendingTodos(
 
 export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     const config = loadConfig(directory);
+
+    // Initialize debug logging
+    initDebugLogger(directory, config.debug);
 
     debug("Plugin initializing", { directory, config });
 

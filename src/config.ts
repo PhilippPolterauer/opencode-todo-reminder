@@ -56,6 +56,12 @@ export const TodoReminderConfigSchema = z.object({
      * @default false
      */
     syntheticPrompt: z.boolean().optional().default(false),
+
+    /**
+     * Enable debug logging to .opencode/todo-reminder.log
+     * @default false
+     */
+    debug: z.boolean().optional().default(false),
 });
 
 export type TodoReminderConfig = z.infer<typeof TodoReminderConfigSchema>;
@@ -69,6 +75,7 @@ const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     includeProgressInPrompt: true,
     useToasts: true,
     syntheticPrompt: false,
+    debug: false,
 };
 
 export function loadConfig(projectDir?: string): Required<TodoReminderConfig> {

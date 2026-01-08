@@ -42,6 +42,7 @@ describe("config", () => {
                 includeProgressInPrompt: true,
                 useToasts: true,
                 syntheticPrompt: false,
+                debug: false,
             });
         });
 
@@ -89,6 +90,7 @@ describe("config", () => {
                 includeProgressInPrompt: false,
                 useToasts: true,
                 syntheticPrompt: false,
+                debug: false,
             };
             writeFileSync(configPath, JSON.stringify(userConfig));
 
