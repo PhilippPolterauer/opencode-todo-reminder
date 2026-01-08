@@ -33,10 +33,17 @@ function createConfig(
         idleDelayMs: 1500,
         cooldownMs: 15000,
         includeProgressInPrompt: true,
-        useToasts: false,
+        useToasts: true,
+        syntheticPrompt: false,
         ...overrides,
     };
 }
+
+// Mock config module
+let mockConfig = createConfig();
+vi.mock("./config.js", () => ({
+    loadConfig: () => mockConfig
+}));
 
 describe("plugin helper functions", () => {
     describe("createSessionState", () => {
@@ -199,17 +206,26 @@ describe("TodoReminderPlugin", () => {
         session: {
             todo: ReturnType<typeof vi.fn>;
             prompt: ReturnType<typeof vi.fn>;
+            messages: ReturnType<typeof vi.fn>;
+        };
+        tui: {
+            showToast: ReturnType<typeof vi.fn>;
         };
     };
     let mockProject: { id: string; name: string };
 
     beforeEach(() => {
         vi.useFakeTimers();
+        mockConfig = createConfig();
 
         mockClient = {
             session: {
                 todo: vi.fn(),
                 prompt: vi.fn(),
+                messages: vi.fn().mockResolvedValue({ data: [] }),
+            },
+            tui: {
+                showToast: vi.fn(),
             },
         };
 
@@ -418,7 +434,7 @@ describe("TodoReminderPlugin", () => {
                 expect(mockClient.session.prompt).not.toHaveBeenCalled();
             });
 
-            it("should not cancel on assistant messages", async () => {
+            it("should also cancel on assistant messages (aggressive cancellation)", async () => {
                 const hooks = await createPlugin();
 
                 // Set up pending state
@@ -444,7 +460,7 @@ describe("TodoReminderPlugin", () => {
                     } as any,
                 });
 
-                // Assistant message (should not cancel)
+                // Assistant message (should now also cancel to avoid races)
                 await hooks.event?.({
                     event: {
                         type: "message.updated",
@@ -460,8 +476,136 @@ describe("TodoReminderPlugin", () => {
 
                 await vi.advanceTimersByTimeAsync(2000);
 
-                // Should have sent prompt
-                expect(mockClient.session.prompt).toHaveBeenCalled();
+                // Should NOT have sent prompt (cancelled by assistant message)
+                expect(mockClient.session.prompt).not.toHaveBeenCalled();
+            });
+
+            it("should track agent from user messages", async () => {
+                const hooks = await createPlugin();
+
+                // Send user message with agent
+                await hooks.event?.({
+                    event: {
+                        type: "message.updated",
+                        properties: {
+                            info: {
+                                id: "msg-1",
+                                sessionID: "session-agent",
+                                role: "user",
+                                agent: "plan",
+                            },
+                        },
+                    } as any,
+                });
+
+                // Set up pending state
+                await hooks.event?.({
+                    event: {
+                        type: "todo.updated",
+                        properties: {
+                            sessionID: "session-agent",
+                            todos: [createTodo({ status: "pending" })],
+                        },
+                    } as any,
+                });
+
+                mockClient.session.todo.mockResolvedValue({
+                    data: [createTodo({ status: "pending" })],
+                });
+                mockClient.session.messages.mockResolvedValue({
+                    data: [
+                        {
+                            info: {
+                                role: "assistant",
+                                time: { completed: Date.now() },
+                            },
+                        },
+                    ],
+                });
+
+                // Trigger idle
+                await hooks.event?.({
+                    event: {
+                        type: "session.idle",
+                        properties: { sessionID: "session-agent" },
+                    } as any,
+                });
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                // Should pass agent to prompt
+                expect(mockClient.session.prompt).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        body: expect.objectContaining({
+                            agent: "plan",
+                        }),
+                    }),
+                );
+            });
+
+            it("should track model from user messages", async () => {
+                const hooks = await createPlugin();
+
+                const testModel = { providerID: "openai", modelID: "gpt-4" };
+
+                // Send user message with model
+                await hooks.event?.({
+                    event: {
+                        type: "message.updated",
+                        properties: {
+                            info: {
+                                id: "msg-1",
+                                sessionID: "session-model",
+                                role: "user",
+                                model: testModel,
+                            },
+                        },
+                    } as any,
+                });
+
+                // Set up pending state
+                await hooks.event?.({
+                    event: {
+                        type: "todo.updated",
+                        properties: {
+                            sessionID: "session-model",
+                            todos: [createTodo({ status: "pending" })],
+                        },
+                    } as any,
+                });
+
+                mockClient.session.todo.mockResolvedValue({
+                    data: [createTodo({ status: "pending" })],
+                });
+                mockClient.session.messages.mockResolvedValue({
+                    data: [
+                        {
+                            info: {
+                                role: "assistant",
+                                time: { completed: Date.now() },
+                            },
+                        },
+                    ],
+                });
+
+                // Trigger idle
+                await hooks.event?.({
+                    event: {
+                        type: "session.idle",
+                        properties: { sessionID: "session-model" },
+                    } as any,
+                });
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                // Should pass model to prompt
+                expect(mockClient.session.prompt).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        body: expect.objectContaining({
+                            model: testModel,
+                        }),
+                    }),
+                );
             });
         });
 
@@ -554,6 +698,78 @@ describe("TodoReminderPlugin", () => {
                 expect(mockClient.session.prompt).not.toHaveBeenCalled();
             });
         });
+
+        it("should show toast notification when enabled", async () => {
+            const hooks = await createPlugin();
+
+            // Setup pending state
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-1",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+
+            // Trigger idle
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-1" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            // Should have called showToast
+            expect(mockClient.tui.showToast).toHaveBeenCalled();
+        });
+
+        it("should use synthetic flag from config in prompt", async () => {
+            mockConfig = createConfig({ syntheticPrompt: true });
+            const hooks = await createPlugin();
+
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-synthetic",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-synthetic" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            expect(mockClient.session.prompt).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    body: expect.objectContaining({
+                        parts: expect.arrayContaining([
+                            expect.objectContaining({
+                                synthetic: true,
+                            }),
+                        ]),
+                    }),
+                }),
+            );
+        });
     });
 
     describe("maybeInject logic", () => {
@@ -613,6 +829,81 @@ describe("TodoReminderPlugin", () => {
 
             // Now should be 2
             expect(mockClient.session.prompt).toHaveBeenCalledTimes(2);
+        });
+
+        it("should inject once per idle event (no periodic reminders)", async () => {
+            mockConfig = createConfig({
+                idleDelayMs: 1000,
+                cooldownMs: 5000,
+                useToasts: false,
+            });
+            const hooks = await createPlugin();
+
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-once",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+
+            // First injection
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-once" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(1500);
+            expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
+
+            // Fast forward a long time - should not prompt again
+            await vi.advanceTimersByTimeAsync(600000);
+            expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
+        });
+
+        it("should not re-inject when user cancels prompt during idle", async () => {
+            mockConfig = createConfig({
+                idleDelayMs: 1000,
+                cooldownMs: 5000,
+                useToasts: false,
+            });
+            const hooks = await createPlugin();
+
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-cancelled",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+            mockClient.session.prompt.mockResolvedValue({ cancelled: true });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-cancelled" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(1500);
+            expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
+
+            await vi.advanceTimersByTimeAsync(600000);
+            expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
         });
 
         it("should trigger loop protection after max attempts", async () => {
@@ -815,10 +1106,8 @@ describe("TodoReminderPlugin", () => {
 
             expect(mockClient.session.prompt).toHaveBeenCalled();
         });
-    });
 
-    describe("experimental.text.complete fallback", () => {
-        it("should schedule fallback injection with longer delay", async () => {
+        it("should skip reminder if the last message was interrupted", async () => {
             const hooks = await createPlugin();
 
             // Set up pending state
@@ -836,41 +1125,166 @@ describe("TodoReminderPlugin", () => {
                 data: [createTodo({ status: "pending" })],
             });
 
-            // Trigger text.complete
-            await hooks["experimental.text.complete"]?.(
-                {
-                    sessionID: "session-1",
-                    messageID: "msg-1",
-                    partID: "part-1",
-                },
-                { text: "done" },
-            );
+            // Mock interrupted last message
+            mockClient.session.messages.mockResolvedValue({
+                data: [
+                    {
+                        info: {
+                            role: "assistant",
+                            error: { name: "MessageAbortedError" },
+                        },
+                    },
+                ],
+            });
 
-            // Default delay (1500) + fallback offset (500) = 2000
-            await vi.advanceTimersByTimeAsync(1900);
+            // Trigger idle
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-1" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            // Should NOT have called prompt
             expect(mockClient.session.prompt).not.toHaveBeenCalled();
-
-            await vi.advanceTimersByTimeAsync(200);
-            expect(mockClient.session.prompt).toHaveBeenCalled();
         });
 
-        it("should skip if hasPending is false", async () => {
+        it("should skip reminder if the last message is from user (queued message)", async () => {
             const hooks = await createPlugin();
 
-            // No pending todos set
+            // Set up pending state
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-queued",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
 
-            await hooks["experimental.text.complete"]?.(
-                {
-                    sessionID: "session-1",
-                    messageID: "msg-1",
-                    partID: "part-1",
-                },
-                { text: "done" },
-            );
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
 
-            await vi.advanceTimersByTimeAsync(5000);
+            // Mock last message is from user (queued, waiting for response)
+            mockClient.session.messages.mockResolvedValue({
+                data: [
+                    {
+                        info: {
+                            role: "user",
+                            sessionID: "session-queued",
+                        },
+                    },
+                ],
+            });
 
+            // Trigger idle
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-queued" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            // Should NOT have called prompt (user has queued message)
             expect(mockClient.session.prompt).not.toHaveBeenCalled();
         });
+
+        it("should skip reminder if the last assistant message is still generating", async () => {
+            const hooks = await createPlugin();
+
+            // Set up pending state
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-generating",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+
+            // Mock assistant message without time.completed (still generating)
+            mockClient.session.messages.mockResolvedValue({
+                data: [
+                    {
+                        info: {
+                            role: "assistant",
+                            sessionID: "session-generating",
+                            time: { started: Date.now() },
+                            // no 'completed' field
+                        },
+                    },
+                ],
+            });
+
+            // Trigger idle
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-generating" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            // Should NOT have called prompt (assistant still generating)
+            expect(mockClient.session.prompt).not.toHaveBeenCalled();
+        });
+
+        it("should send reminder when last assistant message is completed", async () => {
+            const hooks = await createPlugin();
+
+            // Set up pending state
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-completed",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+
+            // Mock assistant message with time.completed (finished)
+            mockClient.session.messages.mockResolvedValue({
+                data: [
+                    {
+                        info: {
+                            role: "assistant",
+                            sessionID: "session-completed",
+                            time: { started: Date.now(), completed: Date.now() },
+                        },
+                    },
+                ],
+            });
+
+            // Trigger idle
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-completed" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            // Should have called prompt (assistant finished)
+            expect(mockClient.session.prompt).toHaveBeenCalled();
+        });
     });
+
 });

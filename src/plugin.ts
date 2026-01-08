@@ -27,6 +27,10 @@ export interface SessionState {
     perTodoInjectCount: Map<string, number>;
     /** Flag to stop injecting for this session after hitting max limit */
     loopProtectionTriggered: boolean;
+    /** Last agent used by the user (e.g. "plan" or "build") */
+    lastUserAgent?: string;
+    /** Last model used by the user */
+    lastUserModel?: { providerID: string; modelID: string };
 }
 
 /**
@@ -94,7 +98,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
     debug("Plugin initializing", { directory, config });
 
-    // Runtime state per session
+    // Runtime state per session (in-memory only; no persistence)
     const sessionStates = new Map<string, SessionState>();
 
     /**
@@ -148,6 +152,52 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         if (state.loopProtectionTriggered) {
             debug("Loop protection triggered, skipping", { sessionID });
             return;
+        }
+
+        // Fetch session messages to check if the last message was interrupted
+        // or if there's a queued/in-flight message we should skip
+        try {
+            const msgResp = await client.session.messages({
+                path: { id: sessionID },
+                query: { limit: 1 },
+            });
+            const lastMessage = msgResp.data?.[0];
+            if (lastMessage) {
+                // The API returns { info: Message, parts: Part[] }
+                const info = (lastMessage as any).info || lastMessage;
+
+                // If the last message is from user, skip (queued message waiting)
+                if (info.role === "user") {
+                    debug("Last message is from user (queued), skipping reminder", {
+                        sessionID,
+                    });
+                    return;
+                }
+                
+                // If the last message was from assistant and it was interrupted, skip
+                if (info.role === "assistant") {
+                    const isInterrupted =
+                        info.error?.name === "MessageAbortedError" ||
+                        info.finish === "abort";
+                    if (isInterrupted) {
+                        debug("Last message was interrupted, skipping reminder", {
+                            sessionID,
+                        });
+                        return;
+                    }
+
+                    // If assistant message is still in progress (no time.completed), skip
+                    if (!info.time?.completed) {
+                        debug("Last assistant message still generating, skipping reminder", {
+                            sessionID,
+                        });
+                        return;
+                    }
+                }
+            }
+        } catch (error) {
+            debug("Error fetching messages", error);
+            // Non-fatal, continue to todos
         }
 
         // Fetch todos
@@ -236,9 +286,13 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                             {
                                 type: "text",
                                 text: blockedText,
-                                synthetic: true,
+                                synthetic: config.syntheticPrompt,
                             },
                         ],
+                        // Use the same agent/model as the user's last message
+                        // This respects Plan vs Build mode
+                        agent: state.lastUserAgent,
+                        model: state.lastUserModel,
                     },
                 });
                 debug("Sent blocked notification");
@@ -251,12 +305,28 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         // Increment injection count for this todo
         state.perTodoInjectCount.set(todoKey, currentCount + 1);
 
+        // Show toast if enabled (before prompt to avoid delay)
+        if (config.useToasts) {
+            try {
+                await client.tui.showToast({
+                    query: { directory },
+                    body: {
+                        title: "TODO Reminder",
+                        message: "A TODO reminder was issued",
+                        variant: "info",
+                    },
+                });
+            } catch (error) {
+                debug("Error showing toast", error);
+            }
+        }
+
         // Build and send the prompt
         const promptText = buildPromptText(config, pendingTodos, todos);
         debug("Sending continuation prompt", { sessionID, promptText });
 
         try {
-            await client.session.prompt({
+            const result = await client.session.prompt({
                 path: { id: sessionID },
                 query: { directory },
                 body: {
@@ -264,11 +334,29 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                         {
                             type: "text",
                             text: promptText,
-                            synthetic: true,
+                            synthetic: config.syntheticPrompt,
                         },
                     ],
+                    // Use the same agent/model as the user's last message
+                    // This respects Plan vs Build mode
+                    agent: state.lastUserAgent,
+                    model: state.lastUserModel,
                 },
             });
+
+            // If the user cancels/dismisses the prompt UI, treat it as a no-op and
+            // do not schedule further periodic reminders.
+            if (result && typeof result === "object") {
+                const resultAny = result as any;
+                if (resultAny.cancelled === true || resultAny.canceled === true) {
+                    debug("Prompt cancelled by user; skipping periodic reminders", {
+                        sessionID,
+                    });
+                    state.lastInjectAtMs = now;
+                    return;
+                }
+            }
+
             state.lastInjectAtMs = now;
             debug("Continuation prompt sent successfully");
         } catch (error) {
@@ -277,17 +365,18 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     }
 
     /**
-     * Schedule an injection after idle delay.
+     * Schedule an injection after delay.
      */
-    function scheduleInjection(sessionID: string): void {
+    function scheduleInjection(sessionID: string, delayMs?: number): void {
         const state = getState(sessionID);
+        const actualDelay = delayMs ?? config.idleDelayMs;
 
         // Cancel any existing timer
         cancelPendingTimer(sessionID);
 
         debug("Scheduling injection", {
             sessionID,
-            idleDelayMs: config.idleDelayMs,
+            delayMs: actualDelay,
         });
 
         state.pendingInjectTimer = setTimeout(() => {
@@ -295,7 +384,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             maybeInject(sessionID).catch((error) => {
                 debug("Error in scheduled maybeInject", error);
             });
-        }, config.idleDelayMs);
+        }, actualDelay);
     }
 
     /**
@@ -316,10 +405,12 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         );
 
         // Remove counters for todos that are no longer pending
+        let changed = false;
         for (const key of state.perTodoInjectCount.keys()) {
             if (!pendingKeys.has(key)) {
                 state.perTodoInjectCount.delete(key);
                 debug("Reset counter for completed todo", { sessionID, key });
+                changed = true;
             }
         }
 
@@ -342,6 +433,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 debug("Reset loop protection, unblocked todos available", {
                     sessionID,
                 });
+                changed = true;
             }
         }
     }
@@ -399,16 +491,37 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 return;
             }
 
-            // Cancel pending injection on user activity (message from user)
+            // Cancel pending injection on any message activity (user or assistant)
+            // This is more aggressive to avoid races with mode switches and queued messages
             if (event.type === "message.updated") {
                 const msgEvent = event as EventMessageUpdated;
                 const { info } = msgEvent.properties;
 
+                debug("Message activity detected, cancelling pending injection", {
+                    sessionID: info.sessionID,
+                    role: info.role,
+                });
+                cancelPendingTimer(info.sessionID);
+
+                // Track agent and model from user messages so we can use the same
+                // agent/model when sending reminders (respects Plan vs Build mode)
                 if (info.role === "user") {
-                    debug("User message detected, cancelling pending injection", {
-                        sessionID: info.sessionID,
-                    });
-                    cancelPendingTimer(info.sessionID);
+                    const state = getState(info.sessionID);
+                    const userInfo = info as any;
+                    if (userInfo.agent) {
+                        state.lastUserAgent = userInfo.agent;
+                        debug("Tracked user agent", {
+                            sessionID: info.sessionID,
+                            agent: userInfo.agent,
+                        });
+                    }
+                    if (userInfo.model) {
+                        state.lastUserModel = userInfo.model;
+                        debug("Tracked user model", {
+                            sessionID: info.sessionID,
+                            model: userInfo.model,
+                        });
+                    }
                 }
                 return;
             }
@@ -436,49 +549,5 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             }
         },
 
-        // Fallback: experimental.text.complete
-        // This runs when the LLM finishes generating, as a backup trigger
-        // if session.idle is not available or fires inconsistently.
-        "experimental.text.complete": async (input, _output) => {
-            debug("text.complete hook called", {
-                sessionID: input.sessionID,
-                messageID: input.messageID,
-            });
-
-            if (!config.enabled) {
-                debug("Plugin disabled, skipping");
-                return;
-            }
-
-            const { sessionID } = input;
-            const state = getState(sessionID);
-
-            // If we don't know hasPending state yet, check it
-            // This is a fallback path, so we may not have received todo.updated yet
-            if (state.hasPending === false) {
-                debug("hasPending is false, skipping text.complete fallback", {
-                    sessionID,
-                });
-                return;
-            }
-
-            // Schedule injection (will be cancelled if session.idle fires first)
-            // Use a slightly longer delay to let session.idle take precedence
-            const originalDelay = config.idleDelayMs;
-            const fallbackDelay = originalDelay + 500;
-
-            cancelPendingTimer(sessionID);
-            state.pendingInjectTimer = setTimeout(() => {
-                state.pendingInjectTimer = null;
-                maybeInject(sessionID).catch((error) => {
-                    debug("Error in text.complete fallback maybeInject", error);
-                });
-            }, fallbackDelay);
-
-            debug("Scheduled fallback injection from text.complete", {
-                sessionID,
-                fallbackDelay,
-            });
-        },
     };
 };

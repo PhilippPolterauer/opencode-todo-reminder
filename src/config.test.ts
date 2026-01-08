@@ -43,7 +43,8 @@ describe("config", () => {
                 idleDelayMs: 1500,
                 cooldownMs: 15000,
                 includeProgressInPrompt: true,
-                useToasts: false,
+                useToasts: true,
+                syntheticPrompt: false,
             });
         });
 
@@ -92,6 +93,7 @@ describe("config", () => {
                 cooldownMs: 20000,
                 includeProgressInPrompt: false,
                 useToasts: true,
+                syntheticPrompt: false,
             };
             writeFileSync(configPath, JSON.stringify(userConfig));
 

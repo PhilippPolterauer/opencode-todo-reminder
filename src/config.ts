@@ -1,64 +1,81 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 
-export interface TodoReminderConfig {
+export const TodoReminderConfigSchema = z.object({
     /**
      * Whether the plugin is enabled
      * @default true
      */
-    enabled?: boolean;
+    enabled: z.boolean().optional().default(true),
 
     /**
      * The reminder message to use
      * @default "You have open todos. Please continue working on them until they are completed."
      */
-    message?: string;
+    message: z
+        .string()
+        .optional()
+        .default(
+            "You have open todos. Please continue working on them until they are completed.",
+        ),
 
     /**
      * Marker used to separate reminder from content (mostly for "append" mode)
      * @default "--- todo-reminder ---"
      */
-    marker?: string;
+    marker: z.string().optional().default("--- todo-reminder ---"),
 
     /**
      * Todo statuses that trigger the reminder
      * @default ["pending", "in_progress", "open"]
      */
-    triggerStatuses?: string[];
+    triggerStatuses: z
+        .array(z.string())
+        .optional()
+        .default(["pending", "in_progress", "open"]),
 
     /**
      * Max number of auto-submits per TODO to prevent infinite loops
      * @default 3
      */
-    maxAutoSubmitsPerTodo?: number;
+    maxAutoSubmitsPerTodo: z.number().optional().default(3),
 
     /**
      * Delay in milliseconds before injecting a continuation prompt after session becomes idle.
      * Prevents racing with late events.
      * @default 1500
      */
-    idleDelayMs?: number;
+    idleDelayMs: z.number().optional().default(1500),
 
     /**
      * Minimum time in milliseconds between auto-injections per session.
      * Prevents rapid-fire prompts.
      * @default 15000
      */
-    cooldownMs?: number;
+    cooldownMs: z.number().optional().default(15000),
 
     /**
      * Whether to include progress information (X/Y completed, Z remaining) in the prompt.
      * @default true
      */
-    includeProgressInPrompt?: boolean;
+    includeProgressInPrompt: z.boolean().optional().default(true),
 
     /**
      * Whether to show toast notifications (only if TUI supports it).
+     * @default true
+     */
+    useToasts: z.boolean().optional().default(true),
+
+    /**
+     * Whether the injected prompt is synthetic (hidden from user)
      * @default false
      */
-    useToasts?: boolean;
-}
+    syntheticPrompt: z.boolean().optional().default(false),
+});
+
+export type TodoReminderConfig = z.infer<typeof TodoReminderConfigSchema>;
 
 const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     enabled: true,
@@ -70,7 +87,8 @@ const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     idleDelayMs: 1500,
     cooldownMs: 15000,
     includeProgressInPrompt: true,
-    useToasts: false,
+    useToasts: true,
+    syntheticPrompt: false,
 };
 
 export function loadConfig(projectDir?: string): Required<TodoReminderConfig> {
@@ -87,8 +105,9 @@ export function loadConfig(projectDir?: string): Required<TodoReminderConfig> {
     for (const configPath of paths) {
         try {
             const content = readFileSync(configPath, "utf-8");
-            const userConfig = JSON.parse(content) as TodoReminderConfig;
-            return { ...DEFAULT_CONFIG, ...userConfig };
+            const userConfig = JSON.parse(content);
+            const parsed = TodoReminderConfigSchema.parse(userConfig);
+            return { ...DEFAULT_CONFIG, ...parsed } as Required<TodoReminderConfig>;
         } catch {
             continue;
         }
