@@ -27,12 +27,14 @@ single source of truth for build/lint/test commands and house style.
 - Do not add lint-only dependencies without a clear justification.
 
 ### Tests
-- No test runner or test scripts configured.
-- No single-test command available.
-- If you add tests, document:
-  - How to run all tests.
-  - How to run a single test file.
-  - How to run a single test case by name.
+- Test framework: Vitest (v4.x)
+- Run all tests: `npm test`
+- Run tests in watch mode: `npm run test:watch`
+- Run a single test file: `npm test -- src/config.test.ts`
+- Run a single test case by name: `npm test -- -t "should return default config"`
+- Test files: `src/**/*.test.ts`
+- Mocks: `src/__mocks__/` (mocks for @opencode-ai packages due to ESM resolution issues)
+- Config: `vitest.config.ts`
 
 ## Code style and conventions
 
@@ -126,10 +128,10 @@ single source of truth for build/lint/test commands and house style.
 - Do not change versioning unless explicitly requested.
 
 ## When adding tests (future)
-- Document the test framework (e.g., Vitest, Jest).
-- Provide a single-test command by file and by test name.
-- Update this file with any required environment variables.
+- Tests are now configured with Vitest.
+- Add new tests alongside source files as `*.test.ts`.
 - Keep tests fast and deterministic.
+- Use the mocks in `src/__mocks__/` for external SDK dependencies.
 
 ## When adding linting (future)
 - Document `npm run lint` and any autofix command.
