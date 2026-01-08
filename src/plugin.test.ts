@@ -433,7 +433,7 @@ describe("TodoReminderPlugin", () => {
                 expect(mockClient.session.prompt).not.toHaveBeenCalled();
             });
 
-            it("should also cancel on assistant messages (aggressive cancellation)", async () => {
+            it("should NOT cancel on assistant message.updated (ignores assistant messages)", async () => {
                 const hooks = await createPlugin();
 
                 // Set up pending state
@@ -450,6 +450,17 @@ describe("TodoReminderPlugin", () => {
                 mockClient.session.todo.mockResolvedValue({
                     data: [createTodo({ status: "pending" })],
                 });
+                mockClient.session.messages.mockResolvedValue({
+                    data: [
+                        {
+                            info: {
+                                id: "msg-1",
+                                role: "assistant",
+                                time: { completed: Date.now() },
+                            },
+                        },
+                    ],
+                });
 
                 // Trigger idle
                 await hooks.event?.({
@@ -459,7 +470,7 @@ describe("TodoReminderPlugin", () => {
                     } as any,
                 });
 
-                // Assistant message (should now also cancel to avoid races)
+                // Assistant message arrives (should be ignored for cancellation)
                 await hooks.event?.({
                     event: {
                         type: "message.updated",
@@ -475,8 +486,8 @@ describe("TodoReminderPlugin", () => {
 
                 await vi.advanceTimersByTimeAsync(2000);
 
-                // Should NOT have sent prompt (cancelled by assistant message)
-                expect(mockClient.session.prompt).not.toHaveBeenCalled();
+                // Should have sent prompt because assistant messages don't cancel
+                expect(mockClient.session.prompt).toHaveBeenCalled();
             });
 
             it("should track agent from user messages", async () => {
@@ -609,7 +620,7 @@ describe("TodoReminderPlugin", () => {
         });
 
         describe("message.part.updated event", () => {
-            it("should cancel pending injection when assistant is generating", async () => {
+            it("should NOT cancel on message.part.updated (ignores all part updates)", async () => {
                 const hooks = await createPlugin();
 
                 // Set up pending state
@@ -626,6 +637,17 @@ describe("TodoReminderPlugin", () => {
                 mockClient.session.todo.mockResolvedValue({
                     data: [createTodo({ status: "pending" })],
                 });
+                mockClient.session.messages.mockResolvedValue({
+                    data: [
+                        {
+                            info: {
+                                id: "msg-1",
+                                role: "assistant",
+                                time: { completed: Date.now() },
+                            },
+                        },
+                    ],
+                });
 
                 // Trigger idle
                 await hooks.event?.({
@@ -635,7 +657,7 @@ describe("TodoReminderPlugin", () => {
                     } as any,
                 });
 
-                // Part update (assistant generating)
+                // Part update (should be ignored for cancellation)
                 await vi.advanceTimersByTimeAsync(200);
                 await hooks.event?.({
                     event: {
@@ -654,8 +676,8 @@ describe("TodoReminderPlugin", () => {
 
                 await vi.advanceTimersByTimeAsync(2000);
 
-                // Should NOT have sent prompt
-                expect(mockClient.session.prompt).not.toHaveBeenCalled();
+                // Should have sent prompt because part updates are ignored
+                expect(mockClient.session.prompt).toHaveBeenCalled();
             });
         });
 

@@ -85,6 +85,9 @@ export function createSessionState(): SessionState {
     };
 }
 
+
+
+
 /**
  * Get a stable key for a todo item.
  */
@@ -160,7 +163,9 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
      */
     function cancelPendingTimer(sessionID: string): void {
         const state = sessionStates.get(sessionID);
-        if (state?.pendingInjectTimer) {
+        if (!state) return;
+
+        if (state.pendingInjectTimer) {
             clearTimeout(state.pendingInjectTimer);
             state.pendingInjectTimer = null;
             debug("Cancelled pending timer", { sessionID });
@@ -512,25 +517,34 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
                 const state = getState(sessionID);
 
-                // Only schedule if we know there are pending todos
+                debug("session.idle received", {
+                    sessionID,
+                    hasPending: state.hasPending,
+                });
+
+                // Only schedule if we have pending todos
                 if (state.hasPending) {
                     scheduleInjection(sessionID);
                 }
                 return;
             }
 
-            // Cancel pending injection on any message activity (user or assistant)
-            // This is more aggressive to avoid races with mode switches and queued messages
+            // Cancel pending injection on user message activity only
             if (event.type === "message.updated") {
                 const msgEvent = event as EventMessageUpdated;
                 const { info } = msgEvent.properties;
 
-                cancelPendingTimer(info.sessionID);
+                const state = getState(info.sessionID);
 
-                // Track agent and model from user messages so we can use the same
-                // agent/model when sending reminders (respects Plan vs Build mode)
+                // Only cancel on USER messages (new user activity)
                 if (info.role === "user") {
-                    const state = getState(info.sessionID);
+                    debug("User message; cancelling pending injection", {
+                        sessionID: info.sessionID,
+                        messageID: info.id,
+                    });
+                    cancelPendingTimer(info.sessionID);
+
+                    // Track agent and model from user messages
                     const userInfo = info as any;
                     if (userInfo.agent) {
                         state.lastUserAgent = userInfo.agent;
@@ -539,17 +553,12 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                         state.lastUserModel = userInfo.model;
                     }
                 }
+                // Assistant messages are ignored for cancellation purposes
                 return;
             }
 
-            // Cancel pending injection on assistant generating (part update from assistant message)
+            // Ignore message.part.updated entirely for cancellation
             if (event.type === "message.part.updated") {
-                const partEvent = event as EventMessagePartUpdated;
-                const { part } = partEvent.properties;
-
-                // Cancel timer if assistant is still generating
-                // (any part update means activity)
-                cancelPendingTimer(part.sessionID);
                 return;
             }
 
