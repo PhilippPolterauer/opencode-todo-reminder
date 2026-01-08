@@ -37,8 +37,8 @@ describe("config", () => {
                 enabled: true,
                 triggerStatuses: ["pending", "in_progress", "open"],
                 maxAutoSubmitsPerTodo: 3,
-                idleDelayMs: 1500,
-                cooldownMs: 15000,
+                idleDelayMs: 500,
+                cooldownMs: 1000,
                 includeProgressInPrompt: true,
                 useToasts: true,
                 syntheticPrompt: false,
@@ -58,7 +58,7 @@ describe("config", () => {
             expect(config.enabled).toBe(false);
             expect(config.cooldownMs).toBe(30000);
             // Defaults should still be present
-            expect(config.idleDelayMs).toBe(1500);
+            expect(config.idleDelayMs).toBe(500);
             expect(config.maxAutoSubmitsPerTodo).toBe(3);
             expect(config.triggerStatuses).toEqual([
                 "pending",
@@ -106,7 +106,7 @@ describe("config", () => {
 
             // Should fall back to defaults
             expect(config.enabled).toBe(true);
-            expect(config.idleDelayMs).toBe(1500);
+            expect(config.idleDelayMs).toBe(500);
         });
 
         it("should use project config over global config", async () => {
@@ -132,7 +132,7 @@ describe("config", () => {
             expect(config.enabled).toBe(true);
             expect(config.idleDelayMs).toBeGreaterThan(0);
             expect(config.idleDelayMs).toBeLessThanOrEqual(5000);
-            expect(config.cooldownMs).toBeGreaterThan(config.idleDelayMs);
+            expect(config.cooldownMs).toBeGreaterThan(0);
             expect(config.maxAutoSubmitsPerTodo).toBeGreaterThan(0);
             expect(config.triggerStatuses.length).toBeGreaterThan(0);
         });

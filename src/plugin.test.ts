@@ -28,8 +28,8 @@ function createConfig(
         enabled: true,
         triggerStatuses: ["pending", "in_progress", "open"],
         maxAutoSubmitsPerTodo: 3,
-        idleDelayMs: 1500,
-        cooldownMs: 15000,
+        idleDelayMs: 500,
+        cooldownMs: 1000,
         includeProgressInPrompt: true,
         useToasts: true,
         syntheticPrompt: false,
@@ -411,7 +411,7 @@ describe("TodoReminderPlugin", () => {
                 });
 
                 // User sends a message before delay expires
-                await vi.advanceTimersByTimeAsync(500);
+                await vi.advanceTimersByTimeAsync(200);
                 await hooks.event?.({
                     event: {
                         type: "message.updated",
@@ -635,7 +635,7 @@ describe("TodoReminderPlugin", () => {
                 });
 
                 // Part update (assistant generating)
-                await vi.advanceTimersByTimeAsync(500);
+                await vi.advanceTimersByTimeAsync(200);
                 await hooks.event?.({
                     event: {
                         type: "message.part.updated",
@@ -772,6 +772,11 @@ describe("TodoReminderPlugin", () => {
 
     describe("maybeInject logic", () => {
         it("should respect cooldown between injections", async () => {
+            mockConfig = createConfig({
+                idleDelayMs: 500,
+                cooldownMs: 5000,
+                useToasts: false,
+            });
             const hooks = await createPlugin();
 
             // Set up pending state
@@ -797,7 +802,7 @@ describe("TodoReminderPlugin", () => {
                     properties: { sessionID: "session-1" },
                 } as any,
             });
-            await vi.advanceTimersByTimeAsync(2000);
+            await vi.advanceTimersByTimeAsync(1000);
 
             expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
 
@@ -808,13 +813,13 @@ describe("TodoReminderPlugin", () => {
                     properties: { sessionID: "session-1" },
                 } as any,
             });
-            await vi.advanceTimersByTimeAsync(2000);
+            await vi.advanceTimersByTimeAsync(1000);
 
             // Should still be 1 because of cooldown
             expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
 
-            // Wait for cooldown to pass (15 seconds default)
-            await vi.advanceTimersByTimeAsync(15000);
+            // Wait for cooldown to pass (5 seconds)
+            await vi.advanceTimersByTimeAsync(5000);
 
             // Trigger again
             await hooks.event?.({

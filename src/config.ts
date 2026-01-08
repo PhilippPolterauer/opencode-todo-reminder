@@ -28,16 +28,16 @@ export const TodoReminderConfigSchema = z.object({
     /**
      * Delay in milliseconds before injecting a continuation prompt after session becomes idle.
      * Prevents racing with late events.
-     * @default 1500
+     * @default 500
      */
-    idleDelayMs: z.number().optional().default(1500),
+    idleDelayMs: z.number().optional().default(500),
 
     /**
      * Minimum time in milliseconds between auto-injections per session.
      * Prevents rapid-fire prompts.
-     * @default 15000
+     * @default 1000
      */
-    cooldownMs: z.number().optional().default(15000),
+    cooldownMs: z.number().optional().default(1000),
 
     /**
      * Whether to include progress information (X/Y completed, Z remaining) in the prompt.
@@ -64,8 +64,8 @@ const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     enabled: true,
     triggerStatuses: ["pending", "in_progress", "open"],
     maxAutoSubmitsPerTodo: 3,
-    idleDelayMs: 1500,
-    cooldownMs: 15000,
+    idleDelayMs: 500,
+    cooldownMs: 1000,
     includeProgressInPrompt: true,
     useToasts: true,
     syntheticPrompt: false,

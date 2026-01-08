@@ -47,8 +47,8 @@ Example:
 {
   "enabled": true,
   "maxAutoSubmitsPerTodo": 3,
-  "idleDelayMs": 1500,
-  "cooldownMs": 15000,
+  "idleDelayMs": 500,
+  "cooldownMs": 1000,
   "triggerStatuses": ["pending", "in_progress", "open"],
   "includeProgressInPrompt": true,
   "useToasts": true,
@@ -62,8 +62,8 @@ Example:
 |--------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable or disable the plugin |
 | `maxAutoSubmitsPerTodo` | number | `3` | Max reminders per todo before pausing (loop protection) |
-| `idleDelayMs` | number | `1500` | Delay (ms) after idle before injecting |
-| `cooldownMs` | number | `15000` | Minimum time (ms) between injections |
+| `idleDelayMs` | number | `500` | Delay (ms) after idle before injecting |
+| `cooldownMs` | number | `1000` | Minimum time (ms) between injections |
 | `triggerStatuses` | string[] | `["pending", "in_progress", "open"]` | Todo statuses that trigger reminders |
 | `includeProgressInPrompt` | boolean | `true` | Include "X/Y completed" in the reminder |
 | `useToasts` | boolean | `true` | Show a toast when a reminder is injected |
