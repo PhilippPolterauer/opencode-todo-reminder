@@ -482,17 +482,10 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
     return {
         event: async ({ event }) => {
-            debug("Event received", { type: event.type });
-
             // Handle todo.updated events
             if (event.type === "todo.updated") {
                 const todoEvent = event as EventTodoUpdated;
                 const { sessionID, todos } = todoEvent.properties;
-
-                debug("todo.updated event", {
-                    sessionID,
-                    todoCount: todos.length,
-                });
 
                 const state = getState(sessionID);
                 const triggerStatuses = new Set(config.triggerStatuses);
@@ -509,7 +502,6 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                     cleanupSession(sessionID);
                 }
 
-                debug("Updated hasPending", { sessionID, hasPending });
                 return;
             }
 
@@ -518,17 +510,11 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 const idleEvent = event as EventSessionIdle;
                 const { sessionID } = idleEvent.properties;
 
-                debug("session.idle event", { sessionID });
-
                 const state = getState(sessionID);
 
                 // Only schedule if we know there are pending todos
                 if (state.hasPending) {
                     scheduleInjection(sessionID);
-                } else {
-                    debug("No pending todos known, skipping schedule", {
-                        sessionID,
-                    });
                 }
                 return;
             }
@@ -539,10 +525,6 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 const msgEvent = event as EventMessageUpdated;
                 const { info } = msgEvent.properties;
 
-                debug("Message activity detected, cancelling pending injection", {
-                    sessionID: info.sessionID,
-                    role: info.role,
-                });
                 cancelPendingTimer(info.sessionID);
 
                 // Track agent and model from user messages so we can use the same
@@ -552,17 +534,9 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                     const userInfo = info as any;
                     if (userInfo.agent) {
                         state.lastUserAgent = userInfo.agent;
-                        debug("Tracked user agent", {
-                            sessionID: info.sessionID,
-                            agent: userInfo.agent,
-                        });
                     }
                     if (userInfo.model) {
                         state.lastUserModel = userInfo.model;
-                        debug("Tracked user model", {
-                            sessionID: info.sessionID,
-                            model: userInfo.model,
-                        });
                     }
                 }
                 return;
@@ -575,9 +549,6 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
                 // Cancel timer if assistant is still generating
                 // (any part update means activity)
-                debug("message.part.updated, cancelling pending injection", {
-                    sessionID: part.sessionID,
-                });
                 cancelPendingTimer(part.sessionID);
                 return;
             }
