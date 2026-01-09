@@ -1,10 +1,13 @@
 {
     "name": "opencode-todo-reminder",
-    "version": "0.0.1",
+    "version": "0.0.3",
     "description": "Opencode plugin to remind and auto-submit prompts when todos are open",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "type": "module",
+    "files": [
+        "dist"
+    ],
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
@@ -12,7 +15,7 @@
         }
     },
     "scripts": {
-        "build": "tsc",
+        "build": "tsc -p tsconfig.build.json",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "test:watch": "vitest"

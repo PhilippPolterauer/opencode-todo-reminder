@@ -1,33 +1,36 @@
 # opencode-todo-reminder
 
-An OpenCode plugin that automatically reminds the Agent to continue working when todos are still open.
+An OpenCode plugin that reminds the Agent to continue when todos are still open.
 
 > **Disclaimer:** This project is not affiliated with, endorsed by, or sponsored by the OpenCode project or its maintainers. It is an independent community plugin.
 
 ## What it does
 
-When an Agent creates a todo list but stops before completing all tasks, this plugin injects a continuation prompt so the Agent keeps going. This helps prevent unfinished multi-step work from stalling.
+If an Agent creates a todo list but stops before finishing, this plugin injects a continuation prompt so the Agent keeps going.
 
 ## How it works
 
-- Watches `session.idle`, `message.updated`, and `session.error` events.
-- When the session becomes idle, it waits for `idleDelayMs`, fetches the current todos, and injects a continuation prompt if any todos match `triggerStatuses`.
-- The reminder message is rendered from `messageFormat` with simple placeholders like `{completed}` and `{total}`.
+- Listens for `session.idle` events.
+- After `idleDelayMs`, fetches the current session todos.
+- If any todos match `triggerStatuses`, injects a reminder via `client.session.prompt(...)`.
+- The reminder text is rendered from `messageFormat` using placeholders.
 
 ## Safety features
 
-- **Loop protection**: Stops after `maxAutoSubmitsPerTodo` attempts without progress and sends a "paused" toast.
-- **User abort detection**: If the user presses escape, reminders are paused until the next user message.
-- **Optional toast**: When `useToasts` is enabled, it calls `client.tui.showToast(...)` before injecting.
+- **Loop protection**: After `maxAutoSubmitsPerTodo` reminders without todo-state changes, reminders pause and (optionally) a warning toast is shown.
+- **User interaction resets**: A new user message cancels any scheduled reminder and resets the loop-protection counter.
+- **User abort detection**: If the user aborts generation (escape), the next idle-cycle reminder is skipped.
+- **Optional toasts**: When `useToasts` is enabled, the plugin shows an info toast on reminders and a warning toast when paused.
+- **Fail-soft behavior**: All API/UI calls are wrapped in `try/catch` to avoid interrupting the session.
 
 ## Installation
 
-Add the plugin to your `opencode.json`:
+Add the plugin to your `opencode.json[c]`:
 
 ```json
 {
   "plugins": [
-    "opencode-todo-reminder"
+    "opencode-todo-reminder", ...//otherPlugins
   ]
 }
 ```
@@ -49,7 +52,8 @@ Example:
   "triggerStatuses": ["pending", "in_progress", "open"],
   "messageFormat": "Incomplete tasks remain in your todo list.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining.",
   "useToasts": true,
-  "syntheticPrompt": false
+  "syntheticPrompt": false,
+  "debug": false
 }
 ```
 
@@ -58,45 +62,30 @@ Example:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable or disable the plugin |
-| `maxAutoSubmitsPerTodo` | number | `3` | Max reminders per todo before pausing (loop protection) |
+| `maxAutoSubmitsPerTodo` | number | `3` | Max reminders before pausing (loop protection) |
 | `idleDelayMs` | number | `500` | Delay (ms) after idle before injecting |
 | `triggerStatuses` | string[] | `["pending", "in_progress", "open"]` | Todo statuses that trigger reminders |
-| `messageFormat` | string | See below | Custom message format with interpolation support |
-| `useToasts` | boolean | `true` | Show a toast when a reminder is injected |
+| `messageFormat` | string | See below | Reminder message format string |
+| `useToasts` | boolean | `true` | Show toast notifications |
 | `syntheticPrompt` | boolean | `false` | Set the injected prompt part `synthetic` flag |
 | `debug` | boolean | `false` | Write debug logs to `.opencode/todo-reminder.log` |
 
-### Message Format Interpolation
+### `messageFormat` placeholders
 
-The `messageFormat` option supports the following placeholders:
-
-| Placeholder | Description |
-|-------------|-------------|
+| Placeholder | Meaning |
+|-------------|---------|
 | `{total}` | Total number of todos |
 | `{completed}` | Number of completed/cancelled todos |
-| `{pending}` | Number of pending todos (same as remaining) |
-| `{remaining}` | Number of remaining todos |
+| `{pending}` | Number of todos matching `triggerStatuses` |
+| `{remaining}` | Alias for `{pending}` |
 
-## Example
+## Development
 
-Without this plugin:
-
-```
-User: "Refactor the auth module and update tests"
-Agent: Creates todo list with 5 tasks, completes 2, then stops
-User: Prompts "continue" manually
-```
-
-With this plugin:
-
-```
-User: "Refactor the auth module and update tests"
-Agent: Creates todo list with 5 tasks, completes 2, pauses
-Plugin: Injects a reminder prompt
-Agent: Continues with task 3, 4, 5
-```
+- Install: `npm install`
+- Build: `npm run build`
+- Typecheck: `npm run typecheck`
+- Tests: `npm test`
 
 ## License
 
 MIT
-
