@@ -1,4 +1,5 @@
 node_modules
 dist
 .opencode/todo-reminder-state.json
+.opencode/package.json
 *.log

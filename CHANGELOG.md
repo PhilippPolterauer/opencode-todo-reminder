@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - Custom message format with interpolation support: `{total}`, `{completed}`, `{pending}`, `{remaining}`
 - REQUIREMENTS.md documenting core plugin requirements
 
+### Chore
+
+- Ignore local development file `.opencode/package.json`
+
 ### Removed
 
 - `cooldownMs` config option

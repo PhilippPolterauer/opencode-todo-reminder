@@ -1,6 +1,5 @@
 {
-    "dependencies": {
-        "@opencode-ai/plugin": "1.1.6",
-        "opencode-todo-reminder": ".."
-    }
+  "dependencies": {
+    "@opencode-ai/plugin": "1.0.223"
+  }
 }

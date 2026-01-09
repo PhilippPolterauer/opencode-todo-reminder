@@ -10,9 +10,9 @@ When an Agent creates a todo list but stops before completing all tasks, this pl
 
 ## How it works
 
-- Watches `todo.updated` and `session.idle` events.
-- When the session becomes idle and there are todos in a trigger status, it waits for `idleDelayMs` and then calls `client.session.prompt(...)` with a short reminder.
-- The reminder can include progress ("X/Y completed") when `includeProgressInPrompt` is enabled.
+- Watches `session.idle`, `message.updated`, and `session.error` events.
+- When the session becomes idle, it waits for `idleDelayMs`, fetches the current todos, and injects a continuation prompt if any todos match `triggerStatuses`.
+- The reminder message is rendered from `messageFormat` with simple placeholders like `{completed}` and `{total}`.
 
 ## Safety features
 
@@ -64,6 +64,7 @@ Example:
 | `messageFormat` | string | See below | Custom message format with interpolation support |
 | `useToasts` | boolean | `true` | Show a toast when a reminder is injected |
 | `syntheticPrompt` | boolean | `false` | Set the injected prompt part `synthetic` flag |
+| `debug` | boolean | `false` | Write debug logs to `.opencode/todo-reminder.log` |
 
 ### Message Format Interpolation
 
