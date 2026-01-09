@@ -1,3 +1,13 @@
 {
-    "debug": true
+  "enabled": true,
+  "triggerStatuses": [
+    "pending",
+    "in_progress",
+    "open"
+  ],
+  "maxAutoSubmitsPerTodo": 2,
+  "idleDelayMs": 500,
+  "useToasts": true,
+  "syntheticPrompt": false,
+  "debug": true
 }

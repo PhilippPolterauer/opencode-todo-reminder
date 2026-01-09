@@ -33,17 +33,18 @@ export const TodoReminderConfigSchema = z.object({
     idleDelayMs: z.number().optional().default(500),
 
     /**
-     * Minimum time in milliseconds between auto-injections per session.
-     * Prevents rapid-fire prompts.
-     * @default 1000
+     * Custom message format for the reminder prompt.
+     * Supports interpolation: {total}, {completed}, {pending}, {remaining}
+     * @default "Incomplete tasks remain in your todo list.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
      */
-    cooldownMs: z.number().optional().default(1000),
-
-    /**
-     * Whether to include progress information (X/Y completed, Z remaining) in the prompt.
-     * @default true
-     */
-    includeProgressInPrompt: z.boolean().optional().default(true),
+    messageFormat: z
+        .string()
+        .optional()
+        .default(
+            "Incomplete tasks remain in your todo list.\n" +
+            "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
+            "Status: {completed}/{total} completed, {remaining} remaining."
+        ),
 
     /**
      * Whether to show toast notifications (only if TUI supports it).
@@ -71,8 +72,10 @@ const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     triggerStatuses: ["pending", "in_progress", "open"],
     maxAutoSubmitsPerTodo: 3,
     idleDelayMs: 500,
-    cooldownMs: 1000,
-    includeProgressInPrompt: true,
+    messageFormat:
+        "Incomplete tasks remain in your todo list.\n" +
+        "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
+        "Status: {completed}/{total} completed, {remaining} remaining.",
     useToasts: true,
     syntheticPrompt: false,
     debug: false,

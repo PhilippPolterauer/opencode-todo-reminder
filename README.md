@@ -16,10 +16,8 @@ When an Agent creates a todo list but stops before completing all tasks, this pl
 
 ## Safety features
 
-- **Loop protection**: Stops after `maxAutoSubmitsPerTodo` attempts for the same todo and sends a "paused" prompt.
-- **Cooldown**: Enforces `cooldownMs` between injections per session.
-- **Interrupt/queue detection**: Skips injection when the last message indicates the session is busy (e.g. last message is from the user, the last assistant message is still generating, or it was aborted).
-- **Agent/model preservation**: Uses the last seen user `agent` and `model` when sending reminder prompts.
+- **Loop protection**: Stops after `maxAutoSubmitsPerTodo` attempts without progress and sends a "paused" toast.
+- **User abort detection**: If the user presses escape, reminders are paused until the next user message.
 - **Optional toast**: When `useToasts` is enabled, it calls `client.tui.showToast(...)` before injecting.
 
 ## Installation
@@ -48,9 +46,8 @@ Example:
   "enabled": true,
   "maxAutoSubmitsPerTodo": 3,
   "idleDelayMs": 500,
-  "cooldownMs": 1000,
   "triggerStatuses": ["pending", "in_progress", "open"],
-  "includeProgressInPrompt": true,
+  "messageFormat": "Incomplete tasks remain in your todo list.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining.",
   "useToasts": true,
   "syntheticPrompt": false
 }
@@ -63,11 +60,21 @@ Example:
 | `enabled` | boolean | `true` | Enable or disable the plugin |
 | `maxAutoSubmitsPerTodo` | number | `3` | Max reminders per todo before pausing (loop protection) |
 | `idleDelayMs` | number | `500` | Delay (ms) after idle before injecting |
-| `cooldownMs` | number | `1000` | Minimum time (ms) between injections |
 | `triggerStatuses` | string[] | `["pending", "in_progress", "open"]` | Todo statuses that trigger reminders |
-| `includeProgressInPrompt` | boolean | `true` | Include "X/Y completed" in the reminder |
+| `messageFormat` | string | See below | Custom message format with interpolation support |
 | `useToasts` | boolean | `true` | Show a toast when a reminder is injected |
 | `syntheticPrompt` | boolean | `false` | Set the injected prompt part `synthetic` flag |
+
+### Message Format Interpolation
+
+The `messageFormat` option supports the following placeholders:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `{total}` | Total number of todos |
+| `{completed}` | Number of completed/cancelled todos |
+| `{pending}` | Number of pending todos (same as remaining) |
+| `{remaining}` | Number of remaining todos |
 
 ## Example
 
