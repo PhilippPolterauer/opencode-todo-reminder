@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.0.3] - 2026-01-09
 
+### Added
+
+- Added `bun-publish` skill documentation for agents.
+
 ### Fixed
 
 - Fix packaging issue where `dist/` was excluded from the release.
