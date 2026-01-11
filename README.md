@@ -2,7 +2,7 @@
 
 An OpenCode plugin that reminds the Agent to continue when todos are still open.
 
-![OpenCode todo-reminder screenshot](docs/output.gif)
+![OpenCode todo-reminder screenshot](https://github.com/PhilippPolterauer/opencode-todo-reminder/raw/main/docs/output.gif)
 
 > **Disclaimer:** This project is not affiliated with, endorsed by, or sponsored by the OpenCode project or its maintainers. It is an independent community plugin.
 

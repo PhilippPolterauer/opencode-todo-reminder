@@ -4,8 +4,10 @@
   "workspaces": {
     "": {
       "name": "opencode-todo-reminder",
-      "devDependencies": {
+      "dependencies": {
         "@opencode-ai/plugin": "^1.1.6",
+      },
+      "devDependencies": {
         "@opencode-ai/sdk": "^1.1.6",
         "@types/node": "^22.0.0",
         "typescript": "^5.9.3",
