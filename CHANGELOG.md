@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 - (Add changes here)
 
+## [0.0.5] - 2026-01-11
+
+### Changed
+
+- Move `@opencode-ai/plugin` into runtime dependencies so the reminder runtime is installed consistently.
+
+### Docs
+
+- Point the README screenshot at the hosted GitHub asset to keep documentation images working.
+
 ## [0.0.3] - 2026-01-09
 
 ### Added
