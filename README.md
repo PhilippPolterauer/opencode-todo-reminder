@@ -31,7 +31,7 @@ Add the plugin to your `opencode.json[c]`:
 
 ```json
 {
-  "plugins": [
+  "plugin": [
     "opencode-todo-reminder", ...//otherPlugins
   ]
 }
