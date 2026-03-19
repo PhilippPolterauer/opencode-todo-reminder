@@ -331,6 +331,75 @@ describe("TodoReminderPlugin", () => {
                 // Should have sent prompt because assistant messages don't cancel
                 expect(mockClient.session.prompt).toHaveBeenCalled();
             });
+
+            it("should pause reminders when assistant message is aborted", async () => {
+                const hooks = await createPlugin();
+
+                await hooks.event?.({
+                    event: {
+                        type: "todo.updated",
+                        properties: {
+                            sessionID: "session-assistant-aborted",
+                            todos: [createTodo({ status: "pending" })],
+                        },
+                    } as any,
+                });
+
+                mockClient.session.todo.mockResolvedValue({
+                    data: [createTodo({ status: "pending" })],
+                });
+
+                await hooks.event?.({
+                    event: {
+                        type: "message.updated",
+                        properties: {
+                            info: {
+                                id: "assistant-msg-1",
+                                sessionID: "session-assistant-aborted",
+                                role: "assistant",
+                                error: { name: "MessageAbortedError" },
+                            },
+                        },
+                    } as any,
+                });
+
+                // Multiple idle events should still be paused
+                for (let i = 0; i < 2; i++) {
+                    await hooks.event?.({
+                        event: {
+                            type: "session.idle",
+                            properties: { sessionID: "session-assistant-aborted" },
+                        } as any,
+                    });
+                    await vi.advanceTimersByTimeAsync(2000);
+                }
+
+                expect(mockClient.session.prompt).not.toHaveBeenCalled();
+
+                // New user message unpauses reminders
+                await hooks.event?.({
+                    event: {
+                        type: "message.updated",
+                        properties: {
+                            info: {
+                                id: "user-msg-1",
+                                sessionID: "session-assistant-aborted",
+                                role: "user",
+                            },
+                        },
+                    } as any,
+                });
+
+                await hooks.event?.({
+                    event: {
+                        type: "session.idle",
+                        properties: { sessionID: "session-assistant-aborted" },
+                    } as any,
+                });
+                await vi.advanceTimersByTimeAsync(2000);
+
+                expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
+            });
         });
 
         describe("message.part.updated event", () => {
@@ -431,6 +500,136 @@ describe("TodoReminderPlugin", () => {
                 await vi.advanceTimersByTimeAsync(5000);
 
                 expect(mockClient.session.prompt).not.toHaveBeenCalled();
+            });
+        });
+
+        describe("session.error event", () => {
+            it("should pause reminders after user abort until next user message", async () => {
+                const hooks = await createPlugin();
+
+                await hooks.event?.({
+                    event: {
+                        type: "todo.updated",
+                        properties: {
+                            sessionID: "session-error-abort",
+                            todos: [createTodo({ status: "pending" })],
+                        },
+                    } as any,
+                });
+
+                mockClient.session.todo.mockResolvedValue({
+                    data: [createTodo({ status: "pending" })],
+                });
+
+                await hooks.event?.({
+                    event: {
+                        type: "session.error",
+                        properties: {
+                            sessionID: "session-error-abort",
+                            error: { name: "MessageAbortedError" },
+                        },
+                    } as any,
+                });
+
+                // Multiple idle events should remain paused after abort
+                for (let i = 0; i < 2; i++) {
+                    await hooks.event?.({
+                        event: {
+                            type: "session.idle",
+                            properties: { sessionID: "session-error-abort" },
+                        } as any,
+                    });
+                    await vi.advanceTimersByTimeAsync(2000);
+                }
+
+                expect(mockClient.session.prompt).not.toHaveBeenCalled();
+
+                // Resume after user sends a new message
+                await hooks.event?.({
+                    event: {
+                        type: "message.updated",
+                        properties: {
+                            info: {
+                                id: "user-msg-after-abort",
+                                sessionID: "session-error-abort",
+                                role: "user",
+                            },
+                        },
+                    } as any,
+                });
+
+                await hooks.event?.({
+                    event: {
+                        type: "session.idle",
+                        properties: { sessionID: "session-error-abort" },
+                    } as any,
+                });
+                await vi.advanceTimersByTimeAsync(2000);
+
+                expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
+            });
+
+            it("should show interruption toast and avoid duplicate spam while paused", async () => {
+                const hooks = await createPlugin();
+
+                await hooks.event?.({
+                    event: {
+                        type: "session.error",
+                        properties: {
+                            sessionID: "session-abort-toast",
+                            error: { name: "MessageAbortedError" },
+                        },
+                    } as any,
+                });
+
+                await hooks.event?.({
+                    event: {
+                        type: "session.error",
+                        properties: {
+                            sessionID: "session-abort-toast",
+                            error: { name: "MessageAbortedError" },
+                        },
+                    } as any,
+                });
+
+                expect(mockClient.tui.showToast).toHaveBeenCalledTimes(1);
+                expect(mockClient.tui.showToast).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        body: expect.objectContaining({
+                            title: "TODO Reminder Paused",
+                            message: expect.stringContaining(
+                                "No reminder will be fired",
+                            ),
+                            variant: "info",
+                        }),
+                    }),
+                );
+
+                // User activity clears pause so a future interruption can notify again
+                await hooks.event?.({
+                    event: {
+                        type: "message.updated",
+                        properties: {
+                            info: {
+                                id: "user-resume-1",
+                                sessionID: "session-abort-toast",
+                                role: "user",
+                            },
+                        },
+                    } as any,
+                });
+
+                await hooks.event?.({
+                    event: {
+                        type: "session.error",
+                        properties: {
+                            sessionID: "session-abort-toast",
+                            error: { name: "MessageAbortedError" },
+                        },
+                    } as any,
+                });
+
+                expect(mockClient.tui.showToast).toHaveBeenCalledTimes(2);
             });
         });
 
@@ -545,7 +744,7 @@ describe("TodoReminderPlugin", () => {
             expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
         });
 
-        it("should not re-inject when user cancels prompt during idle", async () => {
+        it("should pause after an aborted injected prompt until user re-engages", async () => {
             mockConfig = createConfig({
                 idleDelayMs: 1000,
                 useToasts: false,
@@ -565,7 +764,13 @@ describe("TodoReminderPlugin", () => {
             mockClient.session.todo.mockResolvedValue({
                 data: [createTodo({ status: "pending" })],
             });
-            mockClient.session.prompt.mockResolvedValue({ cancelled: true });
+            mockClient.session.prompt.mockResolvedValue({
+                data: {
+                    info: {
+                        error: { name: "MessageAbortedError" },
+                    },
+                },
+            });
 
             await hooks.event?.({
                 event: {
@@ -577,8 +782,111 @@ describe("TodoReminderPlugin", () => {
             await vi.advanceTimersByTimeAsync(1500);
             expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
 
-            await vi.advanceTimersByTimeAsync(600000);
+            // Session should remain paused on future idle events
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-cancelled" },
+                } as any,
+            });
+            await vi.advanceTimersByTimeAsync(1500);
             expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
+
+            // User message should clear pause and allow reminders again
+            mockClient.session.prompt.mockResolvedValue({
+                data: {
+                    info: {},
+                },
+            });
+            await hooks.event?.({
+                event: {
+                    type: "message.updated",
+                    properties: {
+                        info: {
+                            id: "user-msg-resume",
+                            sessionID: "session-cancelled",
+                            role: "user",
+                        },
+                    },
+                } as any,
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-cancelled" },
+                } as any,
+            });
+            await vi.advanceTimersByTimeAsync(1500);
+
+            expect(mockClient.session.prompt).toHaveBeenCalledTimes(2);
+        });
+
+        it("should block reminder-like prompt injections from other plugin instances while paused", async () => {
+            mockConfig = createConfig({
+                useToasts: false,
+            });
+
+            let forwardedCalls = 0;
+            const forwardedMessages: string[] = [];
+
+            (mockClient.session as any).prompt = async (options: any) => {
+                forwardedCalls += 1;
+                const text = options?.body?.parts?.[0]?.text;
+                if (typeof text === "string") {
+                    forwardedMessages.push(text);
+                }
+                return { data: { info: {} } };
+            };
+
+            const hooks = await createPlugin();
+
+            // Pause the session by simulating user abort.
+            await hooks.event?.({
+                event: {
+                    type: "session.error",
+                    properties: {
+                        sessionID: "session-shared-guard",
+                        error: { name: "MessageAbortedError" },
+                    },
+                } as any,
+            });
+
+            // Simulate another plugin trying to inject the reminder text.
+            await (mockClient.session.prompt as any)({
+                path: { id: "session-shared-guard" },
+                query: { directory: "/test/dir" },
+                body: {
+                    parts: [
+                        {
+                            type: "text",
+                            text:
+                                "Incomplete tasks remain in your todo list.\n" +
+                                "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
+                                "Status: 0/5 completed, 5 remaining.",
+                        },
+                    ],
+                },
+            } as any);
+
+            // Reminder should be blocked by guard.
+            expect(forwardedCalls).toBe(0);
+
+            // Normal user prompt text should still go through.
+            await (mockClient.session.prompt as any)({
+                path: { id: "session-shared-guard" },
+                body: {
+                    parts: [
+                        {
+                            type: "text",
+                            text: "continue please",
+                        },
+                    ],
+                },
+            } as any);
+
+            expect(forwardedCalls).toBe(1);
+            expect(forwardedMessages).toEqual(["continue please"]);
         });
 
             it("should trigger loop protection after max attempts", async () => {

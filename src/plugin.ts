@@ -9,6 +9,117 @@ import { loadConfig } from "./config.js";
 let debugEnabled = false;
 let debugLogPath: string | null = null;
 
+const PROMPT_GUARD_INSTALLED_KEY = "__todoReminderPromptGuardInstalled";
+const PROMPT_GUARD_MATCHERS_KEY = "__todoReminderPromptGuardMatchers";
+
+type PromptGuardMatcher = (options: unknown) => boolean;
+
+type PromptFunction = (options: unknown) => Promise<unknown>;
+
+interface PromptGuardedSession {
+    prompt: PromptFunction;
+    [PROMPT_GUARD_INSTALLED_KEY]?: boolean;
+    [PROMPT_GUARD_MATCHERS_KEY]?: PromptGuardMatcher[];
+}
+
+function escapeRegexLiteral(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function createReminderMessagePattern(template: string): RegExp {
+    const escapedTemplate = escapeRegexLiteral(template);
+    const withPlaceholders = escapedTemplate
+        .replace(/\\\{total\\\}/g, "\\d+")
+        .replace(/\\\{completed\\\}/g, "\\d+")
+        .replace(/\\\{pending\\\}/g, "\\d+")
+        .replace(/\\\{remaining\\\}/g, "\\d+");
+
+    return new RegExp(`^${withPlaceholders}$`);
+}
+
+function getPromptPayload(
+    options: unknown,
+): { sessionID: string; text: string } | null {
+    if (!options || typeof options !== "object") {
+        return null;
+    }
+
+    const typedOptions = options as {
+        path?: { id?: unknown };
+        body?: {
+            parts?: Array<{ type?: unknown; text?: unknown }>;
+        };
+    };
+
+    const sessionID = typedOptions.path?.id;
+    if (typeof sessionID !== "string") {
+        return null;
+    }
+
+    const parts = typedOptions.body?.parts;
+    if (!Array.isArray(parts) || parts.length !== 1) {
+        return null;
+    }
+
+    const [part] = parts;
+    if (!part || part.type !== "text" || typeof part.text !== "string") {
+        return null;
+    }
+
+    return {
+        sessionID,
+        text: part.text,
+    };
+}
+
+function installPromptGuard(client: unknown, matcher: PromptGuardMatcher): void {
+    const typedClient = client as { session?: unknown };
+    const session = typedClient.session as PromptGuardedSession | undefined;
+
+    if (!session || typeof session.prompt !== "function") {
+        return;
+    }
+
+    const promptFn = session.prompt as PromptFunction & { mock?: unknown };
+
+    // Keep tests simple: vitest mocks expose `mock` and should not be wrapped.
+    if (typeof promptFn.mock !== "undefined") {
+        return;
+    }
+
+    if (!Array.isArray(session[PROMPT_GUARD_MATCHERS_KEY])) {
+        session[PROMPT_GUARD_MATCHERS_KEY] = [];
+    }
+    session[PROMPT_GUARD_MATCHERS_KEY]?.push(matcher);
+
+    if (session[PROMPT_GUARD_INSTALLED_KEY]) {
+        return;
+    }
+
+    const originalPrompt = session.prompt.bind(session);
+
+    session.prompt = async (options: unknown): Promise<unknown> => {
+        const matchers = session[PROMPT_GUARD_MATCHERS_KEY] ?? [];
+        for (const shouldBlock of matchers) {
+            if (shouldBlock(options)) {
+                return { data: { info: {} } };
+            }
+        }
+
+        return originalPrompt(options);
+    };
+
+    session[PROMPT_GUARD_INSTALLED_KEY] = true;
+}
+
+function isMessageAbortedError(error: unknown): boolean {
+    if (!error || typeof error !== "object") {
+        return false;
+    }
+    const maybeError = error as { name?: unknown };
+    return maybeError.name === "MessageAbortedError";
+}
+
 function setupDebug(directory: string | undefined, enabled: boolean): void {
     debugEnabled = enabled;
     if (enabled && directory) {
@@ -50,6 +161,62 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     const seenUserMsgs = new Map<string, string>(); // sessionID -> last user message ID
     const abortedSessions = new Set<string>(); // sessions aborted by user (escape key)
 
+    async function showInterruptionPausedToast(): Promise<void> {
+        if (!config.useToasts) {
+            return;
+        }
+
+        try {
+            await client.tui.showToast({
+                query: { directory },
+                body: {
+                    title: "TODO Reminder Paused",
+                    message:
+                        "No reminder will be fired because you interrupted the last response. Send a new message to resume reminders.",
+                    variant: "info",
+                },
+            });
+        } catch (e) {
+            log("Interruption toast error (ignored)", String(e));
+        }
+    }
+
+    async function pauseSessionAfterAbort(
+        sessionID: string,
+        source: string,
+    ): Promise<void> {
+        const wasPaused = abortedSessions.has(sessionID);
+        abortedSessions.add(sessionID);
+        cancelTimer(sessionID);
+        log("SESSION ABORTED by user", { sessionID, source, wasPaused });
+
+        if (!wasPaused) {
+            await showInterruptionPausedToast();
+        }
+    }
+
+    const reminderMessagePattern = createReminderMessagePattern(config.messageFormat);
+
+    installPromptGuard(client, (options: unknown): boolean => {
+        const payload = getPromptPayload(options);
+        if (!payload) {
+            return false;
+        }
+
+        if (!abortedSessions.has(payload.sessionID)) {
+            return false;
+        }
+
+        if (!reminderMessagePattern.test(payload.text)) {
+            return false;
+        }
+
+        log("PROMPT GUARD BLOCKED reminder on paused session", {
+            sessionID: payload.sessionID,
+        });
+        return true;
+    });
+
     // Make a snapshot string from todos (to detect changes)
     function snapshot(todos: Todo[]): string {
         return todos
@@ -71,6 +238,11 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     // The main inject function - runs when session is idle
     async function inject(sessionID: string): Promise<void> {
         log(">>> INJECT", { sessionID });
+
+        if (abortedSessions.has(sessionID)) {
+            log("INJECT SKIPPED - session paused after abort", { sessionID });
+            return;
+        }
 
         if (!config.enabled) {
             log("Plugin disabled, skip");
@@ -159,6 +331,11 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         // Send it!
         log("SENDING PROMPT", { message });
         try {
+            if (abortedSessions.has(sessionID)) {
+                log("PROMPT SKIPPED - session paused after abort", { sessionID });
+                return;
+            }
+
             // Show toast if enabled
             if (config.useToasts) {
                 try {
@@ -175,7 +352,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 }
             }
 
-            await client.session.prompt({
+            const promptResponse = await client.session.prompt({
                 path: { id: sessionID },
                 query: { directory },
                 body: {
@@ -188,6 +365,16 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                     ],
                 },
             });
+
+            const promptError = (promptResponse as {
+                data?: { info?: { error?: unknown } };
+            }).data?.info?.error;
+            if (isMessageAbortedError(promptError)) {
+                log("PROMPT RESULT ABORTED", { sessionID });
+                await pauseSessionAfterAbort(sessionID, "prompt-response");
+                return;
+            }
+
             injectCounts.set(sessionID, count + 1);
             log("SENT OK", { newCount: count + 1 });
         } catch (e) {
@@ -217,8 +404,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
                 // Check if this session was aborted (user pressed escape)
                 if (abortedSessions.has(sessionID)) {
-                    log("SKIP INJECT - session was aborted by user", { sessionID });
-                    abortedSessions.delete(sessionID);
+                    log("SKIP INJECT - session paused after user abort", { sessionID });
                     cancelTimer(sessionID);
                     return;
                 }
@@ -229,8 +415,23 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             if (event.type === "message.updated") {
                 // User sent a new message - cancel any pending reminder and clear abort state
                 const { info } = event.properties as {
-                    info: { sessionID: string; role: string; id: string };
+                    info: {
+                        sessionID: string;
+                        role: string;
+                        id: string;
+                        error?: { name?: string };
+                    };
                 };
+
+                if (
+                    info.role === "assistant" &&
+                    isMessageAbortedError(info.error)
+                ) {
+                    log("ASSISTANT MESSAGE ABORTED", { sessionID: info.sessionID });
+                    await pauseSessionAfterAbort(info.sessionID, "message-updated");
+                    return;
+                }
+
                 if (info.role === "user") {
                     // Only react to NEW messages (not duplicates)
                     if (seenUserMsgs.get(info.sessionID) !== info.id) {
@@ -249,12 +450,10 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 // Check if this is a user abort (escape key pressed)
                 const { sessionID, error } = event.properties as {
                     sessionID?: string;
-                    error?: { name: string };
+                    error?: { name?: string };
                 };
-                if (sessionID && error?.name === "MessageAbortedError") {
-                    log("SESSION ABORTED by user", { sessionID });
-                    abortedSessions.add(sessionID);
-                    cancelTimer(sessionID);
+                if (sessionID && isMessageAbortedError(error)) {
+                    await pauseSessionAfterAbort(sessionID, "session-error");
                 }
             }
 

@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 - (Add changes here)
 
+## [0.0.6-beta.0] - 2026-03-19
+
+### Fixed
+
+- Detect user-interrupted assistant responses on current OpenCode versions and pause reminder injections until the user sends a new message.
+- Block reminder-shaped prompt injections while a session is paused so aborting with Escape no longer retriggers the todo reminder.
+
 ## [0.0.5] - 2026-01-11
 
 ### Changed

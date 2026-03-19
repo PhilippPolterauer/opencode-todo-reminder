@@ -1,6 +1,6 @@
 {
     "name": "opencode-todo-reminder",
-    "version": "0.0.5",
+    "version": "0.0.6-beta.0",
     "description": "Opencode plugin to remind and auto-submit prompts when todos are open",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
