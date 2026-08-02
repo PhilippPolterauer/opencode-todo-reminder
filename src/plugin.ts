@@ -120,6 +120,20 @@ function isMessageAbortedError(error: unknown): boolean {
     return maybeError.name === "MessageAbortedError";
 }
 
+// True for ANY assistant-message error, not just user-initiated aborts.
+// opencode's processor.halt() sets assistantMessage.error identically for a
+// deny-rule tool-permission block (Effect.orDie -> defect -> halt, verified
+// in session/tools.ts + processor.ts:596-624) as it does for an escape-key
+// abort - both flip session status to idle via the same code path. Filtering
+// on MessageAbortedError alone let that error case fall through as ordinary
+// idle, unpaused. NOTE: this does not address the separate, likely more
+// common case of the reminder firing on a normal idle mid-task with no error
+// at all - that is the plugin's underlying idle-triggers-reminder design and
+// is out of scope here.
+function hasAssistantMessageError(error: unknown): boolean {
+    return !!error && typeof error === "object";
+}
+
 function setupDebug(directory: string | undefined, enabled: boolean): void {
     debugEnabled = enabled;
     if (enabled && directory) {
@@ -159,7 +173,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     const injectCounts = new Map<string, number>();
     const lastSnapshots = new Map<string, string>();
     const seenUserMsgs = new Map<string, string>(); // sessionID -> last user message ID
-    const abortedSessions = new Set<string>(); // sessions aborted by user (escape key)
+    const abortedSessions = new Set<string>(); // sessions paused: user abort OR any assistant-message error (e.g. permission denial)
 
     async function showInterruptionPausedToast(): Promise<void> {
         if (!config.useToasts) {
@@ -172,7 +186,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 body: {
                     title: "TODO Reminder Paused",
                     message:
-                        "No reminder will be fired because you interrupted the last response. Send a new message to resume reminders.",
+                        "No reminder will be fired because the last response was interrupted or ended in an error. Send a new message to resume reminders.",
                     variant: "info",
                 },
             });
@@ -425,9 +439,12 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
                 if (
                     info.role === "assistant" &&
-                    isMessageAbortedError(info.error)
+                    hasAssistantMessageError(info.error)
                 ) {
-                    log("ASSISTANT MESSAGE ABORTED", { sessionID: info.sessionID });
+                    log("ASSISTANT MESSAGE ERRORED", {
+                        sessionID: info.sessionID,
+                        errorName: (info.error as { name?: unknown })?.name,
+                    });
                     await pauseSessionAfterAbort(info.sessionID, "message-updated");
                     return;
                 }
@@ -447,12 +464,15 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             }
 
             if (event.type === "session.error") {
-                // Check if this is a user abort (escape key pressed)
+                // Any session-level error (user abort, permission denial,
+                // provider error, etc.) halts the turn and flips status to
+                // idle via the same opencode code path - pause reminders for
+                // all of them, not just escape-key aborts.
                 const { sessionID, error } = event.properties as {
                     sessionID?: string;
                     error?: { name?: string };
                 };
-                if (sessionID && isMessageAbortedError(error)) {
+                if (sessionID && hasAssistantMessageError(error)) {
                     await pauseSessionAfterAbort(sessionID, "session-error");
                 }
             }
