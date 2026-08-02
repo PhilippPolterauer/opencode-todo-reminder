@@ -32,7 +32,9 @@ function createReminderMessagePattern(template: string): RegExp {
         .replace(/\\\{total\\\}/g, "\\d+")
         .replace(/\\\{completed\\\}/g, "\\d+")
         .replace(/\\\{pending\\\}/g, "\\d+")
-        .replace(/\\\{remaining\\\}/g, "\\d+");
+        .replace(/\\\{remaining\\\}/g, "\\d+")
+        .replace(/\\\{current_task\\\}/g, "[\\s\\S]*")
+        .replace(/\\\{orphan_table\\\}/g, "[\\s\\S]*");
 
     return new RegExp(`^${withPlaceholders}$`);
 }
@@ -120,6 +122,20 @@ function isMessageAbortedError(error: unknown): boolean {
     return maybeError.name === "MessageAbortedError";
 }
 
+// True for ANY assistant-message error, not just user-initiated aborts.
+// opencode's processor.halt() sets assistantMessage.error identically for a
+// deny-rule tool-permission block (Effect.orDie -> defect -> halt, verified
+// in session/tools.ts + processor.ts:596-624) as it does for an escape-key
+// abort - both flip session status to idle via the same code path. Filtering
+// on MessageAbortedError alone let that error case fall through as ordinary
+// idle, unpaused. NOTE: this does not address the separate, likely more
+// common case of the reminder firing on a normal idle mid-task with no error
+// at all - that is the plugin's underlying idle-triggers-reminder design and
+// is out of scope here.
+function hasAssistantMessageError(error: unknown): boolean {
+    return !!error && typeof error === "object";
+}
+
 function setupDebug(directory: string | undefined, enabled: boolean): void {
     debugEnabled = enabled;
     if (enabled && directory) {
@@ -159,7 +175,8 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     const injectCounts = new Map<string, number>();
     const lastSnapshots = new Map<string, string>();
     const seenUserMsgs = new Map<string, string>(); // sessionID -> last user message ID
-    const abortedSessions = new Set<string>(); // sessions aborted by user (escape key)
+    const abortedSessions = new Set<string>(); // sessions paused: user abort OR any assistant-message error (e.g. permission denial)
+    const orphanTableCache = new Map<string, string>(); // sessionID -> cached {orphan_table} text, scanned once per session lifetime
 
     async function showInterruptionPausedToast(): Promise<void> {
         if (!config.useToasts) {
@@ -172,7 +189,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 body: {
                     title: "TODO Reminder Paused",
                     message:
-                        "No reminder will be fired because you interrupted the last response. Send a new message to resume reminders.",
+                        "No reminder will be fired because the last response was interrupted or ended in an error. Send a new message to resume reminders.",
                     variant: "info",
                 },
             });
@@ -195,7 +212,10 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         }
     }
 
-    const reminderMessagePattern = createReminderMessagePattern(config.messageFormat);
+    const reminderMessagePatterns = [
+        createReminderMessagePattern(config.messageFormat),
+        createReminderMessagePattern(config.inProgressMessageFormat),
+    ];
 
     installPromptGuard(client, (options: unknown): boolean => {
         const payload = getPromptPayload(options);
@@ -207,7 +227,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             return false;
         }
 
-        if (!reminderMessagePattern.test(payload.text)) {
+        if (!reminderMessagePatterns.some((pattern) => pattern.test(payload.text))) {
             return false;
         }
 
@@ -236,6 +256,70 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     }
 
     // The main inject function - runs when session is idle
+    // Session IDs change on every new/resumed/compacted session, and
+    // opencode's todo table has no cross-session linkage of its own -
+    // once a session ends, its incomplete todos just sit in the DB
+    // forever unless something specifically goes looking. Rather than a
+    // separate toast/notification path, this is folded directly into the
+    // existing periodic reminder text via {orphan_table} - scanned once
+    // per session lifetime (cached, not re-scanned on every reminder),
+    // and only ever appended to a message this session was already
+    // going to receive. Never sent as its own standalone message -
+    // another session's leftover plan is not this session's plan.
+    async function getOrphanedTodoTable(sessionID: string): Promise<string> {
+        if (!config.warnOrphanedTodos) return "";
+        if (orphanTableCache.has(sessionID)) return orphanTableCache.get(sessionID) ?? "";
+
+        let sessions: Array<{ id: string; title: string; time: { updated: number } }>;
+        try {
+            const resp = await client.session.list({ query: { directory } });
+            sessions = Array.isArray(resp.data) ? (resp.data as typeof sessions) : [];
+        } catch (e) {
+            log("getOrphanedTodoTable: failed to list sessions", String(e));
+            return "";
+        }
+
+        const candidates = sessions
+            .filter((s) => s.id !== sessionID)
+            .sort((a, b) => b.time.updated - a.time.updated)
+            .slice(0, config.orphanScanLimit);
+
+        const openCounts = new Map<string, number>();
+        for (const candidate of candidates) {
+            try {
+                const resp = await client.session.todo({ path: { id: candidate.id } });
+                const todos = Array.isArray(resp.data) ? resp.data : [];
+                const openCount = todos.filter(
+                    (t) => t.status === "pending" || t.status === "in_progress",
+                ).length;
+                if (openCount > 0) {
+                    openCounts.set(candidate.id, openCount);
+                }
+            } catch (e) {
+                log("getOrphanedTodoTable: failed to fetch todos for candidate", {
+                    sessionID: candidate.id,
+                    error: String(e),
+                });
+            }
+        }
+
+        let table = "";
+        if (openCounts.size > 0) {
+            const rows = [...openCounts.entries()]
+                .map(([id, count]) => `${id} - ${count} open`)
+                .join("\n");
+            table = `\n\nOrphaned todos in other sessions (never revisited):\n${rows}`;
+        }
+
+        orphanTableCache.set(sessionID, table);
+        log("getOrphanedTodoTable: scanned", {
+            sessionID,
+            checked: candidates.length,
+            sessionsWithOrphans: openCounts.size,
+        });
+        return table;
+    }
+
     async function inject(sessionID: string): Promise<void> {
         log(">>> INJECT", { sessionID });
 
@@ -269,7 +353,10 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             statuses: todos.map((t) => t.status),
         });
 
-        // No pending todos = nothing to do
+        // No pending todos = nothing to do. Orphaned todos in OTHER
+        // sessions aren't checked here - they only ride along on a
+        // reminder this session was already going to send (below), never
+        // as a reason to send one on their own.
         if (pending.length === 0) {
             log("No pending todos, done");
             injectCounts.delete(sessionID);
@@ -318,15 +405,26 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             return;
         }
 
-        // Build the reminder message using the configured format
+        // Build the reminder message using the configured format.
+        // A todo already marked in_progress means the model was mid-task,
+        // not idle-and-stuck - messageFormat's "next pending task" wording
+        // is wrong there (reads as "move on" when it should be "finish
+        // this one"), so use inProgressMessageFormat instead.
         const completed = todos.filter(
             (t) => t.status === "completed" || t.status === "cancelled",
         ).length;
-        const message = config.messageFormat
+        const inProgressTodo = pending.find((t) => t.status === "in_progress");
+        const template = inProgressTodo
+            ? config.inProgressMessageFormat
+            : config.messageFormat;
+        const orphanTable = await getOrphanedTodoTable(sessionID);
+        const message = template
             .replace(/\{total\}/g, String(todos.length))
             .replace(/\{completed\}/g, String(completed))
             .replace(/\{pending\}/g, String(pending.length))
-            .replace(/\{remaining\}/g, String(pending.length));
+            .replace(/\{remaining\}/g, String(pending.length))
+            .replace(/\{current_task\}/g, inProgressTodo?.content ?? "")
+            .replace(/\{orphan_table\}/g, orphanTable);
 
         // Send it!
         log("SENDING PROMPT", { message });
@@ -393,8 +491,61 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         timers.set(sessionID, t);
     }
 
+    // Guard against opencode's todowrite tool silently dropping unfinished
+    // todos. Verified in opencode source: SessionTodo.Service.update does a
+    // full delete-then-insert of whatever `todos` array it's given - no
+    // merge, no diffing against the prior list. Todo has no stable id
+    // (packages/schema/src/session-todo.ts: content/status/priority only),
+    // so the only identity available for matching across calls is the
+    // content string. If the model's new TodoWrite call omits a todo that
+    // was pending/in_progress, that todo is gone with no warning. This
+    // backfills it before the call reaches opencode - it does NOT let the
+    // model send an intentionally partial list (its tool description still
+    // says "the updated todo list"), it only stops accidental loss.
+    async function guardTodoWrite(
+        input: { tool: string; sessionID: string; callID: string },
+        output: { args: any },
+    ): Promise<void> {
+        if (!config.preserveUnfinishedTodos) return;
+        if (input.tool !== "todowrite") return;
+
+        const proposed = output.args?.todos;
+        if (!Array.isArray(proposed)) return;
+
+        let current: Todo[];
+        try {
+            const resp = await client.session.todo({ path: { id: input.sessionID } });
+            current = Array.isArray(resp.data) ? resp.data : [];
+        } catch (e) {
+            log("guardTodoWrite: failed to fetch current todos", String(e));
+            return;
+        }
+
+        const proposedContents = new Set(
+            proposed
+                .map((t) => (t && typeof t === "object" ? (t as { content?: unknown }).content : undefined))
+                .filter((c): c is string => typeof c === "string"),
+        );
+
+        const dropped = current.filter(
+            (t) =>
+                (t.status === "pending" || t.status === "in_progress") &&
+                !proposedContents.has(t.content),
+        );
+
+        if (dropped.length === 0) return;
+
+        log("guardTodoWrite: backfilling dropped unfinished todos", {
+            sessionID: input.sessionID,
+            dropped: dropped.map((t) => t.content),
+        });
+
+        output.args.todos = [...proposed, ...dropped];
+    }
+
     // Handle events
     return {
+        "tool.execute.before": guardTodoWrite,
         event: async ({ event }) => {
             // log("EVENT", event.type, event.properties);
 
@@ -425,9 +576,12 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
                 if (
                     info.role === "assistant" &&
-                    isMessageAbortedError(info.error)
+                    hasAssistantMessageError(info.error)
                 ) {
-                    log("ASSISTANT MESSAGE ABORTED", { sessionID: info.sessionID });
+                    log("ASSISTANT MESSAGE ERRORED", {
+                        sessionID: info.sessionID,
+                        errorName: (info.error as { name?: unknown })?.name,
+                    });
                     await pauseSessionAfterAbort(info.sessionID, "message-updated");
                     return;
                 }
@@ -447,12 +601,15 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             }
 
             if (event.type === "session.error") {
-                // Check if this is a user abort (escape key pressed)
+                // Any session-level error (user abort, permission denial,
+                // provider error, etc.) halts the turn and flips status to
+                // idle via the same opencode code path - pause reminders for
+                // all of them, not just escape-key aborts.
                 const { sessionID, error } = event.properties as {
                     sessionID?: string;
                     error?: { name?: string };
                 };
-                if (sessionID && isMessageAbortedError(error)) {
+                if (sessionID && hasAssistantMessageError(error)) {
                     await pauseSessionAfterAbort(sessionID, "session-error");
                 }
             }
@@ -465,6 +622,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 lastSnapshots.delete(info.id);
                 seenUserMsgs.delete(info.id);
                 abortedSessions.delete(info.id);
+                orphanTableCache.delete(info.id);
             }
         },
     };
