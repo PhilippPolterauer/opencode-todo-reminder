@@ -35,7 +35,7 @@ export const TodoReminderConfigSchema = z.object({
     /**
      * Custom message format for the reminder prompt.
      * Supports interpolation: {total}, {completed}, {pending}, {remaining}
-     * @default "Incomplete tasks remain in your todo list.\nIf any are already done, call todowrite to mark them complete/cancelled first.\nKeep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
+     * @default "Incomplete tasks remain in your todo list.\nIf any are already done, call todowrite to mark them complete/cancelled first.\nKeep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining.{orphan_table}"
      */
     messageFormat: z
         .string()
@@ -45,7 +45,7 @@ export const TodoReminderConfigSchema = z.object({
             "If any are already done, call todowrite to mark them complete/cancelled first.\n" +
             "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
             "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
-            "Status: {completed}/{total} completed, {remaining} remaining."
+            "Status: {completed}/{total} completed, {remaining} remaining.{orphan_table}"
         ),
 
     /**
@@ -56,7 +56,7 @@ export const TodoReminderConfigSchema = z.object({
      * to move on, when the correct instruction is to finish the task
      * already underway. Supports the same interpolations as messageFormat,
      * plus {current_task} (the in_progress todo's content).
-     * @default "You have an in-progress task: \"{current_task}\".\nIf it's already done, call todowrite to mark it complete first - otherwise continue working on THIS task until it's done; do not skip ahead to a different one or restart it. Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
+     * @default "You have an in-progress task: \"{current_task}\".\nIf it's already done, call todowrite to mark it complete first - otherwise continue working on THIS task until it's done; do not skip ahead to a different one or restart it. Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\nStatus: {completed}/{total} completed, {remaining} remaining.{orphan_table}"
      */
     inProgressMessageFormat: z
         .string()
@@ -66,7 +66,7 @@ export const TodoReminderConfigSchema = z.object({
             "If it's already done, call todowrite to mark it complete first - otherwise " +
             "continue working on THIS task until it's done; do not skip ahead to a different one or restart it. " +
             "Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\n" +
-            "Status: {completed}/{total} completed, {remaining} remaining."
+            "Status: {completed}/{total} completed, {remaining} remaining.{orphan_table}"
         ),
 
     /**
@@ -94,6 +94,34 @@ export const TodoReminderConfigSchema = z.object({
     preserveUnfinishedTodos: z.boolean().optional().default(true),
 
     /**
+     * Whether to check for incomplete todos left behind in OTHER sessions
+     * in this project when the CURRENT session has none of its own.
+     * Session IDs change on every new/resumed/compacted session, and
+     * opencode's todo table is keyed by session_id with no cross-session
+     * carryover (verified: session table has project_id/parent_id, but
+     * SessionTodo has no linkage of its own) - so a session's incomplete
+     * todos, once that session ends, just sit in the DB forever unless
+     * something specifically goes looking across sessions. Off by default:
+     * this does extra API calls (session.list + one todo fetch per
+     * candidate session) that the other fixes in this plugin don't need,
+     * and surfaces information about possibly-abandoned/no-longer-relevant
+     * old work, which can be noise as easily as it can be useful. When
+     * enabled, this only shows a toast (does not inject anything into the
+     * model's context) - old sessions' tasks are not this session's plan,
+     * and should not be silently presented to the model as if they were.
+     * @default false
+     */
+    warnOrphanedTodos: z.boolean().optional().default(false),
+
+    /**
+     * Upper bound on how many other sessions (most-recently-updated first)
+     * to check for orphaned todos when warnOrphanedTodos is enabled. Bounds
+     * API cost when a project has accumulated many past sessions.
+     * @default 20
+     */
+    orphanScanLimit: z.number().optional().default(20),
+
+    /**
      * Whether the injected prompt is synthetic (hidden from user)
      * @default false
      */
@@ -116,17 +144,19 @@ const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     messageFormat:
         "Incomplete tasks remain in your todo list.\n" +
         "If any are already done, call todowrite to mark them complete/cancelled first.\n" +
-            "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
+        "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
         "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
-        "Status: {completed}/{total} completed, {remaining} remaining.",
+        "Status: {completed}/{total} completed, {remaining} remaining.{orphan_table}",
     inProgressMessageFormat:
         "You have an in-progress task: \"{current_task}\".\n" +
         "If it's already done, call todowrite to mark it complete first - otherwise " +
             "continue working on THIS task until it's done; do not skip ahead to a different one or restart it. " +
         "Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\n" +
-        "Status: {completed}/{total} completed, {remaining} remaining.",
+        "Status: {completed}/{total} completed, {remaining} remaining.{orphan_table}",
     useToasts: true,
     preserveUnfinishedTodos: true,
+    warnOrphanedTodos: false,
+    orphanScanLimit: 20,
     syntheticPrompt: false,
     debug: false,
 };

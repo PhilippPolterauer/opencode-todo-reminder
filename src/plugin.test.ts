@@ -28,15 +28,17 @@ function createConfig(
             "If any are already done, call todowrite to mark them complete/cancelled first.\n" +
             "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
             "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
-            "Status: {completed}/{total} completed, {remaining} remaining.",
+            "Status: {completed}/{total} completed, {remaining} remaining.{orphan_table}",
         inProgressMessageFormat:
             "You have an in-progress task: \"{current_task}\".\n" +
             "If it's already done, call todowrite to mark it complete first - otherwise " +
             "continue working on THIS task until it's done; do not skip ahead to a different one or restart it. " +
             "Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\n" +
-            "Status: {completed}/{total} completed, {remaining} remaining.",
+            "Status: {completed}/{total} completed, {remaining} remaining.{orphan_table}",
         useToasts: true,
         preserveUnfinishedTodos: true,
+        warnOrphanedTodos: false,
+        orphanScanLimit: 20,
         syntheticPrompt: false,
         debug: false,
         ...overrides,
@@ -57,6 +59,7 @@ describe("TodoReminderPlugin", () => {
             todo: ReturnType<typeof vi.fn>;
             prompt: ReturnType<typeof vi.fn>;
             messages: ReturnType<typeof vi.fn>;
+            list: ReturnType<typeof vi.fn>;
         };
         tui: {
             showToast: ReturnType<typeof vi.fn>;
@@ -73,6 +76,7 @@ describe("TodoReminderPlugin", () => {
                 todo: vi.fn(),
                 prompt: vi.fn(),
                 messages: vi.fn().mockResolvedValue({ data: [] }),
+                list: vi.fn().mockResolvedValue({ data: [] }),
             },
             tui: {
                 showToast: vi.fn(),
@@ -1327,6 +1331,123 @@ describe("TodoReminderPlugin", () => {
             expect(output.args.todos).toEqual([
                 { content: "Task A", status: "completed", priority: "medium" },
             ]);
+        });
+    });
+
+    describe("orphaned todos across sessions (warnOrphanedTodos)", () => {
+        it("should append an orphan table to the periodic reminder when another session has pending todos", async () => {
+            mockConfig = createConfig({ warnOrphanedTodos: true });
+            const hooks = await createPlugin();
+
+            (mockClient.session.todo as any).mockImplementation(async (opts: any) => {
+                const id = opts?.path?.id;
+                if (id === "session-current") {
+                    return { data: [createTodo({ content: "Current task", status: "pending" })] };
+                }
+                if (id === "session-old-1") {
+                    return { data: [createTodo({ content: "Old unfinished task", status: "pending" })] };
+                }
+                return { data: [] };
+            });
+
+            (mockClient.session.list as any).mockResolvedValue({
+                data: [
+                    { id: "session-current", title: "Current", time: { updated: 2000 } },
+                    { id: "session-old-1", title: "Old Session", time: { updated: 1000 } },
+                ],
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-current" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            const call = (mockClient.session.prompt as any).mock.calls[0][0];
+            const sentText: string = call.body.parts[0].text;
+
+            expect(sentText).toContain("Orphaned todos in other sessions");
+            expect(sentText).toContain("session-old-1 - 1 open");
+        });
+
+        it("should not call session.list at all when warnOrphanedTodos is disabled", async () => {
+            mockConfig = createConfig({ warnOrphanedTodos: false });
+            const hooks = await createPlugin();
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-current" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            expect(mockClient.session.list).not.toHaveBeenCalled();
+
+            const call = (mockClient.session.prompt as any).mock.calls[0][0];
+            const sentText: string = call.body.parts[0].text;
+            expect(sentText).not.toContain("Orphaned todos");
+        });
+
+        it("should not append anything when no other session has pending todos", async () => {
+            mockConfig = createConfig({ warnOrphanedTodos: true });
+            const hooks = await createPlugin();
+
+            (mockClient.session.todo as any).mockImplementation(async (opts: any) => {
+                const id = opts?.path?.id;
+                if (id === "session-current") {
+                    return { data: [createTodo({ content: "Current task", status: "pending" })] };
+                }
+                return { data: [] };
+            });
+            (mockClient.session.list as any).mockResolvedValue({
+                data: [{ id: "session-current", title: "Current", time: { updated: 1000 } }],
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-current" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            const call = (mockClient.session.prompt as any).mock.calls[0][0];
+            const sentText: string = call.body.parts[0].text;
+            expect(sentText).not.toContain("Orphaned todos");
+        });
+
+        it("should only scan once per session, reusing the cached table across repeated reminders", async () => {
+            mockConfig = createConfig({ warnOrphanedTodos: true, idleDelayMs: 1000 });
+            const hooks = await createPlugin();
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ content: "Still pending", status: "pending" })],
+            });
+            (mockClient.session.list as any).mockResolvedValue({ data: [] });
+
+            // Same unchanged todo snapshot -> reminder fires again on the
+            // next idle without a "change detected" reset in between.
+            for (let i = 0; i < 3; i++) {
+                await hooks.event?.({
+                    event: {
+                        type: "session.idle",
+                        properties: { sessionID: "session-current" },
+                    } as any,
+                });
+                await vi.advanceTimersByTimeAsync(1000);
+            }
+
+            expect(mockClient.session.list).toHaveBeenCalledTimes(1);
         });
     });
 

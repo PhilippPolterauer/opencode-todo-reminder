@@ -33,7 +33,8 @@ function createReminderMessagePattern(template: string): RegExp {
         .replace(/\\\{completed\\\}/g, "\\d+")
         .replace(/\\\{pending\\\}/g, "\\d+")
         .replace(/\\\{remaining\\\}/g, "\\d+")
-        .replace(/\\\{current_task\\\}/g, "[\\s\\S]*");
+        .replace(/\\\{current_task\\\}/g, "[\\s\\S]*")
+        .replace(/\\\{orphan_table\\\}/g, "[\\s\\S]*");
 
     return new RegExp(`^${withPlaceholders}$`);
 }
@@ -175,6 +176,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     const lastSnapshots = new Map<string, string>();
     const seenUserMsgs = new Map<string, string>(); // sessionID -> last user message ID
     const abortedSessions = new Set<string>(); // sessions paused: user abort OR any assistant-message error (e.g. permission denial)
+    const orphanTableCache = new Map<string, string>(); // sessionID -> cached {orphan_table} text, scanned once per session lifetime
 
     async function showInterruptionPausedToast(): Promise<void> {
         if (!config.useToasts) {
@@ -254,6 +256,70 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     }
 
     // The main inject function - runs when session is idle
+    // Session IDs change on every new/resumed/compacted session, and
+    // opencode's todo table has no cross-session linkage of its own -
+    // once a session ends, its incomplete todos just sit in the DB
+    // forever unless something specifically goes looking. Rather than a
+    // separate toast/notification path, this is folded directly into the
+    // existing periodic reminder text via {orphan_table} - scanned once
+    // per session lifetime (cached, not re-scanned on every reminder),
+    // and only ever appended to a message this session was already
+    // going to receive. Never sent as its own standalone message -
+    // another session's leftover plan is not this session's plan.
+    async function getOrphanedTodoTable(sessionID: string): Promise<string> {
+        if (!config.warnOrphanedTodos) return "";
+        if (orphanTableCache.has(sessionID)) return orphanTableCache.get(sessionID) ?? "";
+
+        let sessions: Array<{ id: string; title: string; time: { updated: number } }>;
+        try {
+            const resp = await client.session.list({ query: { directory } });
+            sessions = Array.isArray(resp.data) ? (resp.data as typeof sessions) : [];
+        } catch (e) {
+            log("getOrphanedTodoTable: failed to list sessions", String(e));
+            return "";
+        }
+
+        const candidates = sessions
+            .filter((s) => s.id !== sessionID)
+            .sort((a, b) => b.time.updated - a.time.updated)
+            .slice(0, config.orphanScanLimit);
+
+        const openCounts = new Map<string, number>();
+        for (const candidate of candidates) {
+            try {
+                const resp = await client.session.todo({ path: { id: candidate.id } });
+                const todos = Array.isArray(resp.data) ? resp.data : [];
+                const openCount = todos.filter(
+                    (t) => t.status === "pending" || t.status === "in_progress",
+                ).length;
+                if (openCount > 0) {
+                    openCounts.set(candidate.id, openCount);
+                }
+            } catch (e) {
+                log("getOrphanedTodoTable: failed to fetch todos for candidate", {
+                    sessionID: candidate.id,
+                    error: String(e),
+                });
+            }
+        }
+
+        let table = "";
+        if (openCounts.size > 0) {
+            const rows = [...openCounts.entries()]
+                .map(([id, count]) => `${id} - ${count} open`)
+                .join("\n");
+            table = `\n\nOrphaned todos in other sessions (never revisited):\n${rows}`;
+        }
+
+        orphanTableCache.set(sessionID, table);
+        log("getOrphanedTodoTable: scanned", {
+            sessionID,
+            checked: candidates.length,
+            sessionsWithOrphans: openCounts.size,
+        });
+        return table;
+    }
+
     async function inject(sessionID: string): Promise<void> {
         log(">>> INJECT", { sessionID });
 
@@ -287,7 +353,10 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             statuses: todos.map((t) => t.status),
         });
 
-        // No pending todos = nothing to do
+        // No pending todos = nothing to do. Orphaned todos in OTHER
+        // sessions aren't checked here - they only ride along on a
+        // reminder this session was already going to send (below), never
+        // as a reason to send one on their own.
         if (pending.length === 0) {
             log("No pending todos, done");
             injectCounts.delete(sessionID);
@@ -348,12 +417,14 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         const template = inProgressTodo
             ? config.inProgressMessageFormat
             : config.messageFormat;
+        const orphanTable = await getOrphanedTodoTable(sessionID);
         const message = template
             .replace(/\{total\}/g, String(todos.length))
             .replace(/\{completed\}/g, String(completed))
             .replace(/\{pending\}/g, String(pending.length))
             .replace(/\{remaining\}/g, String(pending.length))
-            .replace(/\{current_task\}/g, inProgressTodo?.content ?? "");
+            .replace(/\{current_task\}/g, inProgressTodo?.content ?? "")
+            .replace(/\{orphan_table\}/g, orphanTable);
 
         // Send it!
         log("SENDING PROMPT", { message });
@@ -551,6 +622,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
                 lastSnapshots.delete(info.id);
                 seenUserMsgs.delete(info.id);
                 abortedSessions.delete(info.id);
+                orphanTableCache.delete(info.id);
             }
         },
     };
