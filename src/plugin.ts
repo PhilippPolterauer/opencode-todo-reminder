@@ -32,7 +32,8 @@ function createReminderMessagePattern(template: string): RegExp {
         .replace(/\\\{total\\\}/g, "\\d+")
         .replace(/\\\{completed\\\}/g, "\\d+")
         .replace(/\\\{pending\\\}/g, "\\d+")
-        .replace(/\\\{remaining\\\}/g, "\\d+");
+        .replace(/\\\{remaining\\\}/g, "\\d+")
+        .replace(/\\\{current_task\\\}/g, "[\\s\\S]*");
 
     return new RegExp(`^${withPlaceholders}$`);
 }
@@ -209,7 +210,10 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         }
     }
 
-    const reminderMessagePattern = createReminderMessagePattern(config.messageFormat);
+    const reminderMessagePatterns = [
+        createReminderMessagePattern(config.messageFormat),
+        createReminderMessagePattern(config.inProgressMessageFormat),
+    ];
 
     installPromptGuard(client, (options: unknown): boolean => {
         const payload = getPromptPayload(options);
@@ -221,7 +225,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             return false;
         }
 
-        if (!reminderMessagePattern.test(payload.text)) {
+        if (!reminderMessagePatterns.some((pattern) => pattern.test(payload.text))) {
             return false;
         }
 
@@ -332,15 +336,24 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             return;
         }
 
-        // Build the reminder message using the configured format
+        // Build the reminder message using the configured format.
+        // A todo already marked in_progress means the model was mid-task,
+        // not idle-and-stuck - messageFormat's "next pending task" wording
+        // is wrong there (reads as "move on" when it should be "finish
+        // this one"), so use inProgressMessageFormat instead.
         const completed = todos.filter(
             (t) => t.status === "completed" || t.status === "cancelled",
         ).length;
-        const message = config.messageFormat
+        const inProgressTodo = pending.find((t) => t.status === "in_progress");
+        const template = inProgressTodo
+            ? config.inProgressMessageFormat
+            : config.messageFormat;
+        const message = template
             .replace(/\{total\}/g, String(todos.length))
             .replace(/\{completed\}/g, String(completed))
             .replace(/\{pending\}/g, String(pending.length))
-            .replace(/\{remaining\}/g, String(pending.length));
+            .replace(/\{remaining\}/g, String(pending.length))
+            .replace(/\{current_task\}/g, inProgressTodo?.content ?? "");
 
         // Send it!
         log("SENDING PROMPT", { message });

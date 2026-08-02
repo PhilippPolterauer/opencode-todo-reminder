@@ -47,6 +47,25 @@ export const TodoReminderConfigSchema = z.object({
         ),
 
     /**
+     * Message format used instead of messageFormat when one of the pending
+     * todos already has status "in_progress" - i.e. the model was mid-task,
+     * not idle-and-stuck. messageFormat's default wording ("continue on the
+     * next pending task") is wrong in this case: it reads as an instruction
+     * to move on, when the correct instruction is to finish the task
+     * already underway. Supports the same interpolations as messageFormat,
+     * plus {current_task} (the in_progress todo's content).
+     * @default "You have an in-progress task: \"{current_task}\".\nContinue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
+     */
+    inProgressMessageFormat: z
+        .string()
+        .optional()
+        .default(
+            "You have an in-progress task: \"{current_task}\".\n" +
+            "Continue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\n" +
+            "Status: {completed}/{total} completed, {remaining} remaining."
+        ),
+
+    /**
      * Whether to show toast notifications (only if TUI supports it).
      * @default true
      */
@@ -75,6 +94,10 @@ const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     messageFormat:
         "Incomplete tasks remain in your todo list.\n" +
         "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
+        "Status: {completed}/{total} completed, {remaining} remaining.",
+    inProgressMessageFormat:
+        "You have an in-progress task: \"{current_task}\".\n" +
+        "Continue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\n" +
         "Status: {completed}/{total} completed, {remaining} remaining.",
     useToasts: true,
     syntheticPrompt: false,

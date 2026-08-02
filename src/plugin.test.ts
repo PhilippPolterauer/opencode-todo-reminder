@@ -27,6 +27,10 @@ function createConfig(
             "Incomplete tasks remain in your todo list.\n" +
             "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
             "Status: {completed}/{total} completed, {remaining} remaining.",
+        inProgressMessageFormat:
+            "You have an in-progress task: \"{current_task}\".\n" +
+            "Continue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\n" +
+            "Status: {completed}/{total} completed, {remaining} remaining.",
         useToasts: true,
         syntheticPrompt: false,
         debug: false,
@@ -703,6 +707,85 @@ describe("TodoReminderPlugin", () => {
                     }),
                 }),
             );
+        });
+
+        it("should use inProgressMessageFormat, naming the in-progress task, instead of messageFormat when a todo is already in_progress", async () => {
+            const hooks = await createPlugin();
+
+            const inProgressTodo = createTodo({
+                id: "task-2",
+                status: "in_progress",
+                content: "Write axiom_gate_context.py",
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-in-progress",
+                        todos: [
+                            createTodo({ id: "task-1", status: "completed" }),
+                            inProgressTodo,
+                            createTodo({ id: "task-3", status: "pending" }),
+                        ],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [
+                    createTodo({ id: "task-1", status: "completed" }),
+                    inProgressTodo,
+                    createTodo({ id: "task-3", status: "pending" }),
+                ],
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-in-progress" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            const call = (mockClient.session.prompt as any).mock.calls[0][0];
+            const sentText: string = call.body.parts[0].text;
+
+            expect(sentText).toContain("Write axiom_gate_context.py");
+            expect(sentText).not.toContain("next pending task");
+        });
+
+        it("should keep using messageFormat (\"next pending task\") when no todo is in_progress", async () => {
+            const hooks = await createPlugin();
+
+            await hooks.event?.({
+                event: {
+                    type: "todo.updated",
+                    properties: {
+                        sessionID: "session-all-pending",
+                        todos: [createTodo({ status: "pending" })],
+                    },
+                } as any,
+            });
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ status: "pending" })],
+            });
+
+            await hooks.event?.({
+                event: {
+                    type: "session.idle",
+                    properties: { sessionID: "session-all-pending" },
+                } as any,
+            });
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            const call = (mockClient.session.prompt as any).mock.calls[0][0];
+            const sentText: string = call.body.parts[0].text;
+
+            expect(sentText).toContain("next pending task");
         });
     });
 
