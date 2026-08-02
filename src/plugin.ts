@@ -420,8 +420,61 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
         timers.set(sessionID, t);
     }
 
+    // Guard against opencode's todowrite tool silently dropping unfinished
+    // todos. Verified in opencode source: SessionTodo.Service.update does a
+    // full delete-then-insert of whatever `todos` array it's given - no
+    // merge, no diffing against the prior list. Todo has no stable id
+    // (packages/schema/src/session-todo.ts: content/status/priority only),
+    // so the only identity available for matching across calls is the
+    // content string. If the model's new TodoWrite call omits a todo that
+    // was pending/in_progress, that todo is gone with no warning. This
+    // backfills it before the call reaches opencode - it does NOT let the
+    // model send an intentionally partial list (its tool description still
+    // says "the updated todo list"), it only stops accidental loss.
+    async function guardTodoWrite(
+        input: { tool: string; sessionID: string; callID: string },
+        output: { args: any },
+    ): Promise<void> {
+        if (!config.preserveUnfinishedTodos) return;
+        if (input.tool !== "todowrite") return;
+
+        const proposed = output.args?.todos;
+        if (!Array.isArray(proposed)) return;
+
+        let current: Todo[];
+        try {
+            const resp = await client.session.todo({ path: { id: input.sessionID } });
+            current = Array.isArray(resp.data) ? resp.data : [];
+        } catch (e) {
+            log("guardTodoWrite: failed to fetch current todos", String(e));
+            return;
+        }
+
+        const proposedContents = new Set(
+            proposed
+                .map((t) => (t && typeof t === "object" ? (t as { content?: unknown }).content : undefined))
+                .filter((c): c is string => typeof c === "string"),
+        );
+
+        const dropped = current.filter(
+            (t) =>
+                (t.status === "pending" || t.status === "in_progress") &&
+                !proposedContents.has(t.content),
+        );
+
+        if (dropped.length === 0) return;
+
+        log("guardTodoWrite: backfilling dropped unfinished todos", {
+            sessionID: input.sessionID,
+            dropped: dropped.map((t) => t.content),
+        });
+
+        output.args.todos = [...proposed, ...dropped];
+    }
+
     // Handle events
     return {
+        "tool.execute.before": guardTodoWrite,
         event: async ({ event }) => {
             // log("EVENT", event.type, event.properties);
 

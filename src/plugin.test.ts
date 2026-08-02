@@ -25,13 +25,18 @@ function createConfig(
         idleDelayMs: 500,
         messageFormat:
             "Incomplete tasks remain in your todo list.\n" +
+            "If any are already done, call todowrite to mark them complete/cancelled first.\n" +
+            "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
             "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
             "Status: {completed}/{total} completed, {remaining} remaining.",
         inProgressMessageFormat:
             "You have an in-progress task: \"{current_task}\".\n" +
-            "Continue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\n" +
+            "If it's already done, call todowrite to mark it complete first - otherwise " +
+            "continue working on THIS task until it's done; do not skip ahead to a different one or restart it. " +
+            "Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\n" +
             "Status: {completed}/{total} completed, {remaining} remaining.",
         useToasts: true,
+        preserveUnfinishedTodos: true,
         syntheticPrompt: false,
         debug: false,
         ...overrides,
@@ -945,7 +950,9 @@ describe("TodoReminderPlugin", () => {
                             type: "text",
                             text:
                                 "Incomplete tasks remain in your todo list.\n" +
-                                "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
+                                "If any are already done, call todowrite to mark them complete/cancelled first.\n" +
+            "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
+            "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
                                 "Status: 0/5 completed, 5 remaining.",
                         },
                     ],
@@ -1206,6 +1213,120 @@ describe("TodoReminderPlugin", () => {
 
             // Should have called prompt (assistant finished)
             expect(mockClient.session.prompt).toHaveBeenCalled();
+        });
+    });
+
+    describe("todowrite merge-guard (preserveUnfinishedTodos)", () => {
+        it("should backfill a pending todo the model omitted from a new TodoWrite call", async () => {
+            const hooks = await createPlugin();
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [
+                    createTodo({ content: "Task A", status: "in_progress" }),
+                    createTodo({ content: "Task B", status: "pending" }),
+                ],
+            });
+
+            const output = {
+                args: {
+                    todos: [
+                        { content: "Task A", status: "completed", priority: "medium" },
+                    ],
+                },
+            };
+
+            await hooks["tool.execute.before"]?.(
+                { tool: "todowrite", sessionID: "session-x", callID: "call-1" },
+                output,
+            );
+
+            expect(output.args.todos).toEqual([
+                { content: "Task A", status: "completed", priority: "medium" },
+                expect.objectContaining({ content: "Task B", status: "pending" }),
+            ]);
+        });
+
+        it("should not touch the call when nothing was dropped", async () => {
+            const hooks = await createPlugin();
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [createTodo({ content: "Task A", status: "pending" })],
+            });
+
+            const originalTodos = [
+                { content: "Task A", status: "in_progress", priority: "medium" },
+            ];
+            const output = { args: { todos: originalTodos } };
+
+            await hooks["tool.execute.before"]?.(
+                { tool: "todowrite", sessionID: "session-x", callID: "call-1" },
+                output,
+            );
+
+            expect(output.args.todos).toBe(originalTodos);
+        });
+
+        it("should not backfill a dropped todo that was already completed/cancelled", async () => {
+            const hooks = await createPlugin();
+
+            mockClient.session.todo.mockResolvedValue({
+                data: [
+                    createTodo({ content: "Task A", status: "completed" }),
+                    createTodo({ content: "Task B", status: "pending" }),
+                ],
+            });
+
+            const output = {
+                args: {
+                    todos: [
+                        { content: "Task B", status: "in_progress", priority: "medium" },
+                    ],
+                },
+            };
+
+            await hooks["tool.execute.before"]?.(
+                { tool: "todowrite", sessionID: "session-x", callID: "call-1" },
+                output,
+            );
+
+            // "Task A" was already completed, so its omission is fine - not backfilled.
+            expect(output.args.todos).toEqual([
+                { content: "Task B", status: "in_progress", priority: "medium" },
+            ]);
+        });
+
+        it("should ignore tool calls other than todowrite", async () => {
+            const hooks = await createPlugin();
+
+            const output = { args: { path: "foo.ts" } };
+            await hooks["tool.execute.before"]?.(
+                { tool: "read", sessionID: "session-x", callID: "call-1" },
+                output,
+            );
+
+            expect(mockClient.session.todo).not.toHaveBeenCalled();
+            expect(output.args).toEqual({ path: "foo.ts" });
+        });
+
+        it("should do nothing when preserveUnfinishedTodos is disabled", async () => {
+            mockConfig = createConfig({ preserveUnfinishedTodos: false });
+            const hooks = await createPlugin();
+
+            const output = {
+                args: {
+                    todos: [{ content: "Task A", status: "completed", priority: "medium" }],
+                },
+            };
+
+            await hooks["tool.execute.before"]?.(
+                { tool: "todowrite", sessionID: "session-x", callID: "call-1" },
+                output,
+            );
+
+            expect(mockClient.session.todo).not.toHaveBeenCalled();
+            expect(output.args.todos).toEqual([
+                { content: "Task A", status: "completed", priority: "medium" },
+            ]);
         });
     });
 

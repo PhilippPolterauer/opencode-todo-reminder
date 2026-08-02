@@ -35,13 +35,15 @@ export const TodoReminderConfigSchema = z.object({
     /**
      * Custom message format for the reminder prompt.
      * Supports interpolation: {total}, {completed}, {pending}, {remaining}
-     * @default "Incomplete tasks remain in your todo list.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
+     * @default "Incomplete tasks remain in your todo list.\nIf any are already done, call todowrite to mark them complete/cancelled first.\nKeep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
      */
     messageFormat: z
         .string()
         .optional()
         .default(
             "Incomplete tasks remain in your todo list.\n" +
+            "If any are already done, call todowrite to mark them complete/cancelled first.\n" +
+            "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
             "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
             "Status: {completed}/{total} completed, {remaining} remaining."
         ),
@@ -54,14 +56,16 @@ export const TodoReminderConfigSchema = z.object({
      * to move on, when the correct instruction is to finish the task
      * already underway. Supports the same interpolations as messageFormat,
      * plus {current_task} (the in_progress todo's content).
-     * @default "You have an in-progress task: \"{current_task}\".\nContinue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
+     * @default "You have an in-progress task: \"{current_task}\".\nIf it's already done, call todowrite to mark it complete first - otherwise continue working on THIS task until it's done; do not skip ahead to a different one or restart it. Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\nStatus: {completed}/{total} completed, {remaining} remaining."
      */
     inProgressMessageFormat: z
         .string()
         .optional()
         .default(
             "You have an in-progress task: \"{current_task}\".\n" +
-            "Continue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\n" +
+            "If it's already done, call todowrite to mark it complete first - otherwise " +
+            "continue working on THIS task until it's done; do not skip ahead to a different one or restart it. " +
+            "Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\n" +
             "Status: {completed}/{total} completed, {remaining} remaining."
         ),
 
@@ -70,6 +74,24 @@ export const TodoReminderConfigSchema = z.object({
      * @default true
      */
     useToasts: z.boolean().optional().default(true),
+
+    /**
+     * Whether TodoWrite calls are guarded against silently dropping
+     * unfinished todos. opencode's todowrite tool fully replaces the
+     * session's todo list on every call (delete-then-insert, verified in
+     * opencode's session/todo.ts) - there is no merge, and Todo has no
+     * stable id (verified in packages/schema/src/session-todo.ts: only
+     * content/status/priority), so anything the model forgets to
+     * re-include just disappears. When true, any todo the model didn't
+     * mention in a new TodoWrite call, and whose prior status was
+     * "pending" or "in_progress" (matched by exact content string - the
+     * only identity available), is appended back before the call reaches
+     * opencode. This does not let the model send a partial list on
+     * purpose (its tool description still says "the updated todo list"),
+     * it only stops accidental loss-by-omission.
+     * @default true
+     */
+    preserveUnfinishedTodos: z.boolean().optional().default(true),
 
     /**
      * Whether the injected prompt is synthetic (hidden from user)
@@ -93,13 +115,18 @@ const DEFAULT_CONFIG: Required<TodoReminderConfig> = {
     idleDelayMs: 500,
     messageFormat:
         "Incomplete tasks remain in your todo list.\n" +
+        "If any are already done, call todowrite to mark them complete/cancelled first.\n" +
+            "Keep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\n" +
         "Continue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\n" +
         "Status: {completed}/{total} completed, {remaining} remaining.",
     inProgressMessageFormat:
         "You have an in-progress task: \"{current_task}\".\n" +
-        "Continue working on THIS task until it's done - do not skip ahead to a different one or restart it. Mark it complete when finished.\n\n" +
+        "If it's already done, call todowrite to mark it complete first - otherwise " +
+            "continue working on THIS task until it's done; do not skip ahead to a different one or restart it. " +
+        "Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\n" +
         "Status: {completed}/{total} completed, {remaining} remaining.",
     useToasts: true,
+    preserveUnfinishedTodos: true,
     syntheticPrompt: false,
     debug: false,
 };
