@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "{env:OPENCODE_MODEL}",
+  "small_model": "{env:OPENCODE_MODEL}",
+  "permission": {
+    "edit": "allow",
+    "bash": "allow",
+    "external_directory": "deny"
+  },
+  "plugin": [
+    "/opt/plugin-src"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "debug": true,
+  "preserveUnfinishedTodos": true,
+  "warnOrphanedTodos": false
+}
