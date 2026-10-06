@@ -80,8 +80,8 @@ teardown() {
 trap teardown EXIT
 
 log "building and starting server detached"
-$COMPOSE up -d --build
 SERVER_UP=1
+$COMPOSE up -d --build
 
 log "running live test client (it waits for the server itself, no separate readiness loop needed here)"
 set +e
