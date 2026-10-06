@@ -1,0 +1,45 @@
+# Explicit project name - without this, Compose derives it from the
+# directory holding this file (test/live -> "live"), which is why the
+# container was showing up as the generic live-server-1. This renames
+# both the container and the network (opencode-todo-reminder-server-1,
+# opencode-todo-reminder_default) without touching the service name
+# ("server") that the Makefile/run-live-test.sh already reference.
+name: opencode-todo-reminder
+
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: test/live/Dockerfile
+      args:
+        WORKER_UID: "1000"
+        WORKER_GID: "1000"
+    ports:
+      - "49610:49610"
+    # This daemon's default nproc ulimit (as low as 128:256, measured
+    # elsewhere on this same host) is enforced per REAL UID system-wide,
+    # not per-container - once other containers running as uid 1000 have
+    # used up that budget, setpriv's exec after the privilege drop hits
+    # EAGAIN ("Resource temporarily unavailable") before entrypoint.sh
+    # even starts. Same root cause and same fix already proven for
+    # cicd_runner's own images on this host - unconditional, applies
+    # regardless of uid.
+    ulimits:
+      nproc: 8192
+    environment:
+      # Set at `make docker-up`/`docker compose up` time, e.g.:
+      #   OPENCODE_MODEL=opencode/big-pickle make docker-up
+      OPENCODE_MODEL: "${OPENCODE_MODEL:?set OPENCODE_MODEL, e.g. opencode/big-pickle}"
+      WORKER_UID: "1000"
+      WORKER_GID: "1000"
+    volumes:
+      # REQUIRED - entrypoint.sh's serve mode hard-fails without a real
+      # auth.json for any non-local-Ollama provider. Use
+      # extract-opencode-auth-path.sh (or `make auth-path`) rather than
+      # hand-typing this.
+      - "${OPENCODE_AUTH_JSON_HOST_PATH:?set to your real host auth.json path, or run: make auth-path}:/home/harness/.local/share/opencode/auth.json:ro"
+      # Results land here - the actual Electron project the model
+      # builds, plus the plugin's own debug log at
+      # results/.opencode/todo-reminder.log once a session starts
+      # working in /workspace.
+      - "./results:/workspace"

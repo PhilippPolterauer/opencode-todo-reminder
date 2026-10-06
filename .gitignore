@@ -3,3 +3,7 @@ dist
 .opencode/todo-reminder-state.json
 .opencode/package.json
 *.log
+test/live/results
+test/live/results/logs/*
+test/live/results-*
+*.tgz

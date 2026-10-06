@@ -142,4 +142,31 @@ describe("config", () => {
             expect(config.messageFormat).toBeDefined();
         });
     });
+
+    describe("orphanScanLimit constraints", () => {
+        it("should accept a positive integer", async () => {
+            const { TodoReminderConfigSchema } = await import("./config.js");
+            const result = TodoReminderConfigSchema.parse({ orphanScanLimit: 5 });
+            expect(result.orphanScanLimit).toBe(5);
+        });
+
+        it("should accept zero", async () => {
+            const { TodoReminderConfigSchema } = await import("./config.js");
+            const result = TodoReminderConfigSchema.parse({ orphanScanLimit: 0 });
+            expect(result.orphanScanLimit).toBe(0);
+        });
+
+        it("should reject a negative value", async () => {
+            // A negative value previously reached slice(0, negative), which
+            // scans everything except the last N sessions instead of
+            // enforcing an upper bound.
+            const { TodoReminderConfigSchema } = await import("./config.js");
+            expect(() => TodoReminderConfigSchema.parse({ orphanScanLimit: -5 })).toThrow();
+        });
+
+        it("should reject a fractional value", async () => {
+            const { TodoReminderConfigSchema } = await import("./config.js");
+            expect(() => TodoReminderConfigSchema.parse({ orphanScanLimit: 2.5 })).toThrow();
+        });
+    });
 });

@@ -52,8 +52,12 @@ Example:
   "maxAutoSubmitsPerTodo": 3,
   "idleDelayMs": 500,
   "triggerStatuses": ["pending", "in_progress", "open"],
-  "messageFormat": "Incomplete tasks remain in your todo list.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining.",
+  "messageFormat": "Incomplete tasks remain in your todo list.\nIf any are already done, call todowrite to mark them complete/cancelled first.\nKeep todo statuses current going forward - update each one via todowrite as soon as it is finished, not only when reminded.\nContinue working on the next pending task now; do not ask for permission; mark tasks complete when done.\n\nStatus: {completed}/{total} completed, {remaining} remaining.{orphan_table}",
+  "inProgressMessageFormat": "You have an in-progress task: \"{current_task}\".\nIf it's already done, call todowrite to mark it complete first - otherwise continue working on THIS task until it's done; do not skip ahead to a different one or restart it. Keep todo statuses current going forward, not only when reminded. Mark it complete when finished.\n\nStatus: {completed}/{total} completed, {remaining} remaining.{orphan_table}",
   "useToasts": true,
+  "preserveUnfinishedTodos": true,
+  "warnOrphanedTodos": false,
+  "orphanScanLimit": 20,
   "syntheticPrompt": false,
   "debug": false
 }
@@ -67,12 +71,16 @@ Example:
 | `maxAutoSubmitsPerTodo` | number | `3` | Max reminders before pausing (loop protection) |
 | `idleDelayMs` | number | `500` | Delay (ms) after idle before injecting |
 | `triggerStatuses` | string[] | `["pending", "in_progress", "open"]` | Todo statuses that trigger reminders |
-| `messageFormat` | string | See below | Reminder message format string |
+| `messageFormat` | string | See below | Reminder message format used when no todo is in_progress |
+| `inProgressMessageFormat` | string | See below | Reminder message format used instead of `messageFormat` when a todo is already `in_progress`, so the model is told to finish that task rather than move to "the next pending" one |
 | `useToasts` | boolean | `true` | Show toast notifications |
+| `preserveUnfinishedTodos` | boolean | `true` | Before a `todowrite` call reaches opencode, backfill any todo the model's new call omitted whose prior status was still unfinished (matched by `triggerStatuses`) - opencode's `todowrite` fully replaces the todo list on every call with no merge, so an omitted todo would otherwise just be lost |
+| `warnOrphanedTodos` | boolean | `false` | Scan other sessions in the same project (once per session lifetime, only when this session's own reminder is already about to fire) for incomplete todos left behind under a different session id, and append a short summary via `{orphan_table}` |
+| `orphanScanLimit` | number | `20` | Upper bound (non-negative integer) on how many other sessions, most-recently-updated first, to check when `warnOrphanedTodos` is enabled |
 | `syntheticPrompt` | boolean | `false` | Set the injected prompt part `synthetic` flag |
 | `debug` | boolean | `false` | Write debug logs to `.opencode/todo-reminder.log` |
 
-### `messageFormat` placeholders
+### `messageFormat` / `inProgressMessageFormat` placeholders
 
 | Placeholder | Meaning |
 |-------------|---------|
@@ -80,6 +88,8 @@ Example:
 | `{completed}` | Number of completed/cancelled todos |
 | `{pending}` | Number of todos matching `triggerStatuses` |
 | `{remaining}` | Alias for `{pending}` |
+| `{current_task}` | `inProgressMessageFormat` only - the content of the todo currently `in_progress` |
+| `{orphan_table}` | Populated when `warnOrphanedTodos` finds incomplete todos in other sessions (empty string otherwise) - a short `sessionID - N open` list |
 
 ## Development
 
