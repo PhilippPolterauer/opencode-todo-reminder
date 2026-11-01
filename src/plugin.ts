@@ -2,6 +2,7 @@ import { type Plugin } from "@opencode-ai/plugin";
 import { type Todo } from "@opencode-ai/sdk";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import { loadConfig } from "./config.js";
 
 // === DEBUG LOGGING ===
@@ -148,6 +149,9 @@ function log(...args: unknown[]): void {
 
 // === PLUGIN ===
 
+const REMINDER_COMMAND = "reminder";
+const REMINDER_TOOL = "todo_reminder";
+
 export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     const config = loadConfig(directory);
     setupDebug(directory, config.debug);
@@ -160,6 +164,36 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
     const lastSnapshots = new Map<string, string>();
     const seenUserMsgs = new Map<string, string>(); // sessionID -> last user message ID
     const abortedSessions = new Set<string>(); // sessions aborted by user (escape key)
+    let isEnabled = config.enabled; // runtime toggle, starts from config
+
+    function describeState(): string {
+        return isEnabled ? "enabled" : "disabled";
+    }
+
+    async function setEnabled(value: boolean): Promise<void> {
+        isEnabled = value;
+        log("RUNTIME TOGGLE", { isEnabled });
+        if (!isEnabled) {
+            for (const sessionID of [...timers.keys()]) {
+                cancelTimer(sessionID);
+            }
+        }
+        if (!config.useToasts) {
+            return;
+        }
+        try {
+            await client.tui.showToast({
+                query: { directory },
+                body: {
+                    title: "TODO Reminder",
+                    message: `Reminders ${describeState()}`,
+                    variant: "info",
+                },
+            });
+        } catch (e) {
+            log("Toggle toast error (ignored)", String(e));
+        }
+    }
 
     async function showInterruptionPausedToast(): Promise<void> {
         if (!config.useToasts) {
@@ -244,7 +278,7 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
             return;
         }
 
-        if (!config.enabled) {
+        if (!isEnabled) {
             log("Plugin disabled, skip");
             return;
         }
@@ -384,6 +418,10 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
     // Schedule inject after a short delay
     function scheduleInject(sessionID: string): void {
+        if (!isEnabled) {
+            log("SKIP SCHEDULE - plugin disabled", { sessionID });
+            return;
+        }
         cancelTimer(sessionID);
         log("SCHEDULING", { sessionID, delayMs: config.idleDelayMs });
         const t = setTimeout(() => {
@@ -395,6 +433,41 @@ export const TodoReminderPlugin: Plugin = async ({ client, directory }) => {
 
     // Handle events
     return {
+        config: async (opencodeConfig: {
+            command?: Record<string, { template: string; description?: string }>;
+        }) => {
+            opencodeConfig.command = opencodeConfig.command ?? {};
+            opencodeConfig.command[REMINDER_COMMAND] ??= {
+                description: "Toggle TODO reminders on/off (usage: /reminder [on|off|status])",
+                template:
+                    `Call the ${REMINDER_TOOL} tool with action "$ARGUMENTS" ` +
+                    `(use "toggle" if no argument was given), then report its result in one short sentence.`,
+            };
+        },
+        tool: {
+            [REMINDER_TOOL]: {
+                description:
+                    "Turn the TODO reminder plugin on or off at runtime, or report its current status.",
+                args: {
+                    action: z
+                        .enum(["on", "off", "toggle", "status"])
+                        .describe("on, off, toggle or status"),
+                },
+                execute: async (args: { action: string }): Promise<string> => {
+                    const action = String(args.action ?? "").trim().toLowerCase();
+                    if (action === "on") {
+                        await setEnabled(true);
+                    } else if (action === "off") {
+                        await setEnabled(false);
+                    } else if (action === "toggle" || action === "") {
+                        await setEnabled(!isEnabled);
+                    } else if (action !== "status") {
+                        return `Unknown action "${action}". Use on, off, toggle or status.`;
+                    }
+                    return `TODO reminders are ${describeState()}.`;
+                },
+            },
+        },
         event: async ({ event }) => {
             // log("EVENT", event.type, event.properties);
 

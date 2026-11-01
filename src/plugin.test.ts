@@ -1126,4 +1126,37 @@ describe("TodoReminderPlugin", () => {
         });
     });
 
+
+    describe("runtime toggle", () => {
+        it("registers the /reminder command", async () => {
+            const hooks = await createPlugin();
+            const cfg: any = {};
+            await hooks.config!(cfg);
+            expect(cfg.command.reminder.template).toContain("todo_reminder");
+        });
+
+        it("disables and re-enables reminders via the tool", async () => {
+            mockClient.session.todo.mockResolvedValue({ data: [createTodo()] });
+            mockClient.session.prompt.mockResolvedValue({ data: {} });
+            const hooks = await createPlugin();
+            const exec = (action: string) =>
+                (hooks.tool as any).todo_reminder.execute({ action });
+
+            expect(await exec("off")).toContain("disabled");
+            expect(await exec("status")).toContain("disabled");
+
+            await hooks.event!({
+                event: { type: "session.idle", properties: { sessionID: "s1" } },
+            } as any);
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(mockClient.session.prompt).not.toHaveBeenCalled();
+
+            expect(await exec("toggle")).toContain("enabled");
+            await hooks.event!({
+                event: { type: "session.idle", properties: { sessionID: "s1" } },
+            } as any);
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(mockClient.session.prompt).toHaveBeenCalledTimes(1);
+        });
+    });
 });

@@ -22,6 +22,7 @@ If an Agent creates a todo list but stops before finishing, this plugin injects 
 - **Loop protection**: After `maxAutoSubmitsPerTodo` reminders without todo-state changes, reminders pause and (optionally) a warning toast is shown.
 - **User interaction resets**: A new user message cancels any scheduled reminder and resets the loop-protection counter.
 - **User abort detection**: If the user aborts generation (escape), the next idle-cycle reminder is skipped.
+- **Runtime toggle**: Use `/reminder on`, `/reminder off`, `/reminder status` (or `/reminder` to toggle) to switch reminders without editing config. The state is shown in a toast and resets to the `enabled` config value on restart.
 - **Optional toasts**: When `useToasts` is enabled, the plugin shows an info toast on reminders and a warning toast when paused.
 - **Fail-soft behavior**: All API/UI calls are wrapped in `try/catch` to avoid interrupting the session.
 
@@ -63,7 +64,7 @@ Example:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | boolean | `true` | Enable or disable the plugin |
+| `enabled` | boolean | `true` | Initial enabled state of the plugin (can be toggled at runtime with `/reminder`) |
 | `maxAutoSubmitsPerTodo` | number | `3` | Max reminders before pausing (loop protection) |
 | `idleDelayMs` | number | `500` | Delay (ms) after idle before injecting |
 | `triggerStatuses` | string[] | `["pending", "in_progress", "open"]` | Todo statuses that trigger reminders |
